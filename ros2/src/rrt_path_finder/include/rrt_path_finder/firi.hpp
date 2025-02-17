@@ -415,6 +415,21 @@ namespace firi
         return true;
     }
 
+    inline void shrinkPolygon(Eigen::MatrixX4d &hPoly, double r)
+    {
+        // Each row of hPoly represents a plane: ax + by + cz + d <= 0
+        for (int i = 0; i < hPoly.rows(); ++i)
+        {
+            Eigen::Vector3d normal = hPoly.block<1, 3>(i, 0).transpose();
+            double norm = normal.norm();
+            if (norm > 1e-6) // Avoid division by zero
+            {
+                normal /= norm;
+                hPoly(i, 3) += r * norm; // Move the plane inward by r
+            }
+        }
+    }
+
 }
 
 #endif

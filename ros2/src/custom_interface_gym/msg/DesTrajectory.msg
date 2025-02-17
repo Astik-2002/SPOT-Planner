@@ -11,6 +11,7 @@ uint32 ACTION_ABORT                = 2  # Abort the current trajectory
 uint32 ACTION_WARN_START           = 3  # Warning: trajectory start issue
 uint32 ACTION_WARN_FINAL           = 4  # Warning: trajectory final issue
 uint32 ACTION_WARN_IMPOSSIBLE      = 5  # Warning: impossible trajectory
+uint32 ACTION_BACKUP      = 6  # backup trajectory
 uint32 action                       # Action type
 
 # Trajectory order and segments.

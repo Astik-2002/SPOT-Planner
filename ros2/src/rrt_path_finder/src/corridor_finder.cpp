@@ -10,7 +10,19 @@ safeRegionRrtStar::safeRegionRrtStar( ){
 
 safeRegionRrtStar::~safeRegionRrtStar(){ }
 
-void safeRegionRrtStar::setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov_ )
+Eigen::Vector3d safeRegionRrtStar::computeNoiseStd(const Eigen::Vector3d& point) {
+    double x = point.x();
+    // Compute axial noise (σz) using the formula from the paper
+    double sigma_x = 0.001063 + 0.0007278 * x + 0.003949 * x * x;
+
+    // Compute lateral noise (σx, σy)
+    double sigma_y = 0.04;
+    double sigma_z = 0.04;
+
+    return Eigen::Vector3d(sigma_x, sigma_y, sigma_z);
+}
+
+void safeRegionRrtStar::setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov_, bool uncertanity_ )
 {   
     std::cout<<"set param called"<<std::endl;
     safety_margin = safety_margin_;
@@ -18,7 +30,8 @@ void safeRegionRrtStar::setParam( double safety_margin_, double search_margin_, 
     max_radius    = max_radius_;
     sample_range  = sample_range_;
     h_fov = h_fov_;
-    v_fov = v_fov_;
+    v_fov = v_fov_;\
+    uncertanity = uncertanity_;
 }
 
 void safeRegionRrtStar::reset()
@@ -36,7 +49,7 @@ void safeRegionRrtStar::reset()
     path_exist_status  = true;
     inform_status      = false;
     global_navi_status = false;
-    best_distance      = inf;  
+    best_distance      = INFINITY;  
 }
 
 void safeRegionRrtStar::setStartPt( Vector3d startPt, Vector3d endPt)
@@ -49,7 +62,7 @@ void safeRegionRrtStar::setStartPt( Vector3d startPt, Vector3d endPt)
 }
 
 void safeRegionRrtStar::setPt( Vector3d startPt, Vector3d endPt, double xl, double xh, double yl, double yh, double zl, double zh,
-                           double local_range, int max_iter, double sample_portion, double goal_portion )
+                           double local_range, int max_iter, double sample_portion, double goal_portion, double yaw)
 {
     start_pt = startPt;
     end_pt   = endPt; 
@@ -87,12 +100,16 @@ void safeRegionRrtStar::setPt( Vector3d startPt, Vector3d endPt, double xl, doub
     sample_range = local_range;
     max_samples  = max_iter;
     inlier_ratio = sample_portion;
-    goal_ratio   = goal_portion; 
+    goal_ratio   = goal_portion;
+    current_yaw = yaw;
+
 }
 
-void safeRegionRrtStar::setInput(pcl::PointCloud<pcl::PointXYZ> cloud_in)
+void safeRegionRrtStar::setInput(pcl::PointCloud<pcl::PointXYZ> cloud_in, Eigen::Vector3d origin)
 {     
-    kdtreeForMap.setInputCloud( cloud_in.makeShared() );    
+    kdtreeForMap.setInputCloud( cloud_in.makeShared() );  
+    CloudIn = cloud_in;
+    pcd_origin = origin;
 }
 
 void safeRegionRrtStar::setInputforCollision(pcl::PointCloud<pcl::PointXYZ> cloud_in)
@@ -114,7 +131,6 @@ inline double safeRegionRrtStar::getDis(const Vector3d & p1, const Vector3d & p2
 
 inline double safeRegionRrtStar::radiusSearch( Vector3d & search_Pt)
 {     
-    // if(getDis(search_Pt, start_pt) > sample_range)
     //    return max_radius - search_margin;
 
     pcl::PointXYZ searchPoint;
@@ -126,7 +142,17 @@ inline double safeRegionRrtStar::radiusSearch( Vector3d & search_Pt)
     pointRadiusSquaredDistance.clear();
 
     kdtreeForMap.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-    double radius = sqrt(pointRadiusSquaredDistance[0]) - search_margin;
+    pcl::PointXYZ nearest_obstacle = CloudIn.points[pointIdxRadiusSearch[0]];
+    Eigen::Vector3d obs{nearest_obstacle.x, nearest_obstacle.y, nearest_obstacle.z};
+    Eigen::Vector3d obs_camera_frame = obs - pcd_origin;
+    Eigen::Vector3d std_dev_vector = computeNoiseStd(obs_camera_frame);
+    double search_margin_local = search_margin;
+    if(uncertanity)
+    {
+        search_margin_local = std_dev_vector.maxCoeff()*sqrt(11.3345);
+        search_margin_local = std::min(0.6, search_margin_local);
+    }
+    double radius = sqrt(pointRadiusSquaredDistance[0]) - search_margin_local;
     return min(radius, double(max_radius));
 }
 
@@ -198,6 +224,8 @@ void safeRegionRrtStar::treePrune(NodePtr newPtr)
 
 void safeRegionRrtStar::removeInvalid()
 {     
+    // std::cout<<"[backup debug] seg check 3"<<std::endl;
+
     // std::cout<<"[root debug] seg check 7"<<std::endl;
 
     vector<NodePtr> UpdateNodeList;
@@ -415,7 +443,7 @@ inline Vector3d safeRegionRrtStar::genSample()
     //    1. generate samples according to (rho, phi), which is a unit circle
     //    2. scale the unit circle to a ellipsoid
     //    3. rotate the ellipsoid
-    if(!inform_status){ 
+    if(!inform_status) { 
         if( bias > goal_ratio && bias <= (goal_ratio + inlier_ratio) ){ 
             // sample inside the local map's boundary
             pt(0)    = rand_x_in(eng);
@@ -454,6 +482,30 @@ inline Vector3d safeRegionRrtStar::genSample()
     return pt;
 }
 
+bool safeRegionRrtStar::isInFOV(const Eigen::Vector3d& pt)
+{
+    Vector3d dir = pt - start_pt;
+    double distance = dir.norm();
+    if (distance == 0) return true;
+
+    // Normalize direction vector
+    dir.normalize();
+
+    // Compute yaw and pitch of direction vector
+    double azimuth = atan2(dir.y(), dir.x()); // Horizontal angle
+    double elevation = asin(dir.z()); // Vertical angle
+
+    // Convert UAV yaw to radians
+    double yaw_rad = current_yaw;
+
+    // Compute yaw difference and normalize to [-pi, pi]
+    double yaw_diff = azimuth - yaw_rad;
+    yaw_diff = atan2(sin(yaw_diff), cos(yaw_diff));
+
+    // Check if within horizontal and vertical FOV limits
+    return (fabs(yaw_diff) <= (h_fov / 2.0)) && (fabs(elevation) <= (v_fov / 2.0));
+}
+
 inline NodePtr safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr node_nearst_ptr )
 {
     double dis       = getDis(node_nearst_ptr, pt_sample);
@@ -476,7 +528,7 @@ inline NodePtr safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr node
     double radius_ = radiusSearch( center );
     double h_dis_  = getDis(center, end_pt);
 
-    NodePtr node_new_ptr = new Node( center, radius_, inf, h_dis_ ); 
+    NodePtr node_new_ptr = new Node( center, radius_, INFINITY, h_dis_ ); 
     
     return node_new_ptr;
 }
@@ -666,7 +718,7 @@ void safeRegionRrtStar::tracePath()
     {
         std::cout<<"[trace path] can't find a feasible path. "<<std::endl;
         path_exist_status = false;
-        best_distance = inf;
+        best_distance = INFINITY;
         inform_status = false;
         EndList.clear();
         Path   = Eigen::MatrixXd::Identity(3,3);
@@ -677,7 +729,7 @@ void safeRegionRrtStar::tracePath()
     EndList = feasibleEndList;
 
     best_end_ptr = feasibleEndList[0];
-    double best_cost = inf;
+    double best_cost = INFINITY;
     for(auto nodeptr: feasibleEndList)
     {   
         double cost = (nodeptr->g + getDis(nodeptr, end_pt) + getDis(root_node, commit_root) );
@@ -1009,12 +1061,12 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
         if(feasibleEndList.size() == 0 || elapsed > time_limit ){
             path_exist_status = false;
             inform_status = false;
-            best_distance = inf;
+            best_distance = INFINITY;
             break;
         }
         else{
             best_end_ptr = feasibleEndList[0];
-            double best_cost = inf;
+            double best_cost = INFINITY;
             for(auto nodeptr: feasibleEndList)
             {
                 double cost = (nodeptr->g + getDis(nodeptr, end_pt) + getDis(root_node, commit_root) );

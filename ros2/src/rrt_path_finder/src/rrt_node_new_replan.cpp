@@ -25,8 +25,11 @@
 #include <tf2_ros/buffer.h>
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
 
 #include "rrt_path_finder/firi.hpp"
+#include "rrt_path_finder/ciri.h"
 #include "rrt_path_finder/gcopter.hpp"
 #include "rrt_path_finder/trajectory.hpp"
 #include "rrt_path_finder/geo_utils.hpp"
@@ -49,7 +52,8 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 0.7);
+        this->declare_parameter("safety_margin", 0.8);
+        this->declare_parameter("uav_radius", 0.6);
         this->declare_parameter("search_margin", 0.7);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
@@ -68,7 +72,7 @@ public:
         this->declare_parameter("z_l", 0.5);
         this->declare_parameter("z_l2", -3.0);
 
-        this->declare_parameter("z_h", 1.7);
+        this->declare_parameter("z_h", 1.0);
         this->declare_parameter("z_h2", 3.5);
 
         this->declare_parameter("target_x", 0.0);
@@ -81,6 +85,7 @@ public:
 
         // Read parameters
         _safety_margin = this->get_parameter("safety_margin").as_double();
+        _uav_radius = this->get_parameter("uav_radius").as_double();
         _search_margin = this->get_parameter("search_margin").as_double();
         _max_radius = this->get_parameter("max_radius").as_double();
         _sample_range = this->get_parameter("sample_range").as_double();
@@ -130,7 +135,7 @@ public:
         _dest_pts_sub = this->create_subscription<nav_msgs::msg::Path>(
             "waypoints", 1, std::bind(&PointCloudPlanner::rcvWaypointsCallBack, this, std::placeholders::_1));
         _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
+            "noisy_pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
         _odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom", 10, std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1));
 
@@ -173,7 +178,7 @@ private:
     tf2_ros::TransformListener tf_listener_;
 
     // Path Planning Parameters
-    double _planning_rate, _safety_margin, _search_margin, _max_radius, _sample_range, _replan_distance;
+    double _planning_rate, _safety_margin, _uav_radius, _search_margin, _max_radius, _sample_range, _replan_distance;
     double _refine_portion, _sample_portion, _goal_portion, _path_find_limit, _stop_time, _time_commit;
     double _x_l, _x_h, _y_l, _y_h, _z_l, _z_h, _z_l2, _z_h2;  // For random map simulation: map boundary
     
@@ -189,12 +194,13 @@ private:
     float smoothingEps = 0.01;
     float relcostto1 = 0.00001;
     int _max_samples;
-    double _commit_distance = 8.0;
+    double _commit_distance = 6.0;
+    double current_yaw = 0;
     double max_vel = 0.5;
     float threshold = 0.8;
     int trajectory_id = 0;
     int order = 5;
-    double convexCoverRange = 1.0;
+    double convexCoverRange = 1.5;
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
@@ -228,6 +234,7 @@ private:
     bool _is_target_receive = false;
     bool _is_has_map = false;
     bool _is_complete = false;
+    bool uncertanity_compensation = true;
 
 
     // ROS 2-compatible callback functions
@@ -250,7 +257,7 @@ private:
     // Initializing rrt parameters
     void setRRTPlannerParams()
     {
-        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 60, 60);
+        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
         _rrtPathPlanner.reset();
     }
 
@@ -264,6 +271,21 @@ private:
         _start_vel[0] = _odom.twist.twist.linear.x;
         _start_vel[1] = _odom.twist.twist.linear.y;
         _start_vel[2] = _odom.twist.twist.linear.z;
+
+        tf2::Quaternion q(
+        _odom.pose.pose.orientation.x,
+        _odom.pose.pose.orientation.y,
+        _odom.pose.pose.orientation.z,
+        _odom.pose.pose.orientation.w
+        );
+
+        // Convert to Euler angles
+        double roll, pitch, yaw;
+        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+
+        // Store the yaw angle
+        current_yaw = yaw; // Yaw in radians
+        
         // odom_time = std::chrono::steady_clock::time_point(
         //     std::chrono::seconds(_odom.header.stamp.sec) +
         //     std::chrono::nanoseconds(_odom.header.stamp.nanosec)
@@ -289,10 +311,10 @@ private:
         }
         checkSafeTrajectory();
         std::cout<<"[odom callback] distance to commit target: "<<_rrtPathPlanner.getDis(_start_pos, _commit_target)<<std::endl;
-        std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
-        std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
+        // std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
+        // std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
 
-        std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
+        // std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
 
         // RCLCPP_WARN(this->get_logger(), "Received odometry: position(x: %.2f, y: %.2f, z: %.2f)",
                // _odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose);
@@ -332,68 +354,74 @@ private:
         {
             pcd_points.emplace_back(pt.x, pt.y, pt.z);
         }
-        // for(auto pt: cloud_input.points)
-        // {
-        //     double x = pt.x;
-        //     double y = pt.y;
-        //     double z = pt.z;
+        /*
+        for(auto pt: cloud_input.points)
+        {
+            double x = pt.x;
+            double y = pt.y;
+            double z = pt.z;
+            
+            double distance = sqrt(pow(x,2) + pow(y,2) + pow(z,2));
 
-        //     double distance = sqrt(pow(x,2) + pow(y,2) + pow(z,2));
+            if(distance > _commit_distance)
+            {
+                continue;
+            }
+            double sigma_x = 0.001063 + 0.0007278*distance + 0.003949*pow(distance, 2) + 0.022*pow(distance, 3/2);
+            double sigma_y = 0.04;
+            double sigma_z = sigma_y;
+            std::default_random_engine generator;
+            std::normal_distribution<double> distribution_x(0.0, sigma_x);
+            std::normal_distribution<double> distribution_y(0.0, sigma_y);
+            std::normal_distribution<double> distribution_z(0.0, sigma_z);
 
-        //     if(distance > _commit_distance)
-        //     {
-        //         continue;
-        //     }
-        //     double sigma_x = 0.001063 + 0.0007278*distance + 0.003949*pow(distance, 2) + 0.022*pow(distance, 3/2);
-        //     double sigma_y = 0.04;
-        //     double sigma_z = sigma_y;
-        //     std::default_random_engine generator;
-        //     std::normal_distribution<double> distribution_x(0.0, sigma_x);
-        //     std::normal_distribution<double> distribution_y(0.0, sigma_y);
-        //     std::normal_distribution<double> distribution_z(0.0, sigma_z);
+            double noise_x = distribution_x(generator);
+            double noise_y = distribution_y(generator);
+            double noise_z = distribution_z(generator);
+            
+            
+            double dr1 = _safety_margin; // sqrt(pow(noise_x,2) + pow(noise_y,2) + pow(noise_z,2)); // constant value added
+            double dr2 = dr1/2;
+            std::vector<double> dr_vec{dr1, dr2};
+            for(double dr: dr_vec)
+            {
+                Eigen::Vector3d p1(x + dr, y - dr, z), p2(x + dr, y, z), p3(x + dr, y + dr, z), p4(x, y - dr, z);
+                Eigen::Vector3d p5(x, y + dr, z), p6(x - dr, y - dr, z), p7(x - dr, y, z), p8(x - dr, y + dr, z), p9(x + dr, y - dr, z - dr);
+                Eigen::Vector3d p10(x + dr, y, z - dr), p11(x + dr, y + dr, z - dr), p12(x, y - dr, z - dr), p13(x, y + dr, z - dr), p14(x - dr, y - dr, z - dr);
+                Eigen::Vector3d p15(x - dr, y, z - dr), p16(x - dr, y + dr, z - dr), p17(x + dr, y - dr, z + dr), p18(x + dr, y, z + dr), p19(x + dr, y + dr, z + dr);
+                Eigen::Vector3d p20(x, y - dr, z + dr), p21(x, y + dr, z + dr), p22(x - dr, y - dr, z + dr), p23(x - dr, y, z + dr), p24(x - dr, y + dr, z + dr);
+                Eigen::Vector3d p25(x, y, z - dr), p26(x, y, z + dr);
+                pcd_points.push_back(p1);
+                pcd_points.push_back(p2);
+                pcd_points.push_back(p3);
+                pcd_points.push_back(p4);
+                pcd_points.push_back(p5);
+                pcd_points.push_back(p6);
+                pcd_points.push_back(p7);
+                pcd_points.push_back(p8);
+                pcd_points.push_back(p9);
+                pcd_points.push_back(p10);
+                pcd_points.push_back(p11);
+                pcd_points.push_back(p12);
+                pcd_points.push_back(p13);
+                pcd_points.push_back(p14);
+                pcd_points.push_back(p15);
+                pcd_points.push_back(p16);
+                pcd_points.push_back(p17);
+                pcd_points.push_back(p18);
+                pcd_points.push_back(p19);
+                pcd_points.push_back(p20);
+                pcd_points.push_back(p21);
+                pcd_points.push_back(p22);
+                pcd_points.push_back(p23);
+                pcd_points.push_back(p24);
+                pcd_points.push_back(p25);
+                pcd_points.push_back(p26);
 
-        //     double noise_x = distribution_x(generator);
-        //     double noise_y = distribution_y(generator);
-        //     double noise_z = distribution_z(generator);
-
-        //     double dr1 = sqrt(pow(noise_x,2) + pow(noise_y,2) + pow(noise_z,2)); // constant value added
-        //     double dr2 = dr1/2;
-        //     std::vector<double> dr_vec{dr1, dr2};
-        //     for(double dr: dr_vec)
-        //     {
-        //         Eigen::Vector3d p1(x + dr, y - dr, z), p2(x + dr, y, z), p3(x + dr, y + dr, z), p4(x, y - dr, z);
-        //         Eigen::Vector3d p5(x, y + dr, z), p6(x - dr, y - dr, z), p7(x - dr, y, z), p8(x - dr, y + dr, z), p9(x + dr, y - dr, z - dr);
-        //         Eigen::Vector3d p10(x + dr, y, z - dr), p11(x + dr, y + dr, z - dr), p12(x, y - dr, z - dr), p13(x, y + dr, z - dr), p14(x - dr, y - dr, z - dr);
-        //         Eigen::Vector3d p15(x - dr, y, z - dr), p16(x - dr, y + dr, z - dr), p17(x + dr, y - dr, z + dr), p18(x + dr, y, z + dr), p19(x + dr, y + dr, z + dr);
-        //         Eigen::Vector3d p20(x, y - dr, z + dr), p21(x, y + dr, z + dr), p22(x - dr, y - dr, z + dr), p23(x - dr, y, z + dr), p24(x - dr, y + dr, z + dr);
-        //         Eigen::Vector3d p25(x, y, z - dr), p26(x, y, z + dr);
-        //         pcd_points.push_back(p1);
-        //         pcd_points.push_back(p2);
-        //         pcd_points.push_back(p3);
-        //         pcd_points.push_back(p4);
-        //         pcd_points.push_back(p5);
-        //         pcd_points.push_back(p6);
-        //         pcd_points.push_back(p7);
-        //         pcd_points.push_back(p8);
-        //         pcd_points.push_back(p9);
-        //         pcd_points.push_back(p10);
-        //         pcd_points.push_back(p11);
-        //         pcd_points.push_back(p12);
-        //         pcd_points.push_back(p13);
-        //         pcd_points.push_back(p14);
-        //         pcd_points.push_back(p15);
-        //         pcd_points.push_back(p16);
-        //         pcd_points.push_back(p17);
-        //         pcd_points.push_back(p18);
-        //         pcd_points.push_back(p19);
-        //         pcd_points.push_back(p20);
-        //         pcd_points.push_back(p21);
-        //         pcd_points.push_back(p22);
-        //         pcd_points.push_back(p23);
-        //         pcd_points.push_back(p24);
-        //     }
-        // }
-        _rrtPathPlanner.setInput(cloud_input);
+            }
+            
+        }*/
+        _rrtPathPlanner.setInput(cloud_input, _start_pos);
         _rrtPathPlanner.setInputforCollision(cloud_input);
         //RCLCPP_WARN(this->get_logger(), "Point Cloud received");
         
@@ -519,6 +547,109 @@ private:
 
     }
 
+        
+    void convexCoverCIRI(const std::vector<Eigen::Vector3d> &path, 
+        const double &range,
+        std::vector<Eigen::MatrixX4d> &hpolys,
+        const Eigen::Vector3d &o,
+        bool uncertanity,
+        const double eps)
+    {
+        Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
+        Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
+
+        hpolys.clear();
+        int n = int(path.size());
+        
+        Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+        bd(0, 0) = 1.0;
+        bd(1, 0) = -1.0;
+        bd(2, 1) = 1.0;
+        bd(3, 1) = -1.0;
+        bd(4, 2) = 1.0;
+        bd(5, 2) = -1.0;
+
+        Eigen::MatrixX4d hp, gap;
+        Eigen::MatrixX3d tangent_pcd1, tangent_pcd2;
+        Eigen::Vector3d a(path[0][0], path[0][1], path[0][2]);
+        Eigen::Vector3d b = a;
+        std::vector<Eigen::Vector3d> valid_pc;
+        std::vector<Eigen::Vector3d> bs;
+        valid_pc.reserve(pcd_points.size());
+        super_planner::CIRI ciri;
+        ciri.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
+
+        for (int i = 0; i < n;)
+        {
+            if(uncertanity)
+            {
+                std::cout<<"[ciri debug] stochastic polygons "<<std::endl;
+            }
+            else
+            {
+                std::cout<<"[ciri debug] deterministic polygons "<<std::endl;
+            }
+
+            Eigen::Vector3d path_point = path[i];
+            a = b;
+            b = path_point;
+            i++;
+            bs.emplace_back(b);
+
+            bd(0, 3) = -std::min(std::max(a(0), b(0)) + range, highCorner(0));
+            bd(1, 3) = +std::max(std::min(a(0), b(0)) - range, lowCorner(0));
+            bd(2, 3) = -std::min(std::max(a(1), b(1)) + range, highCorner(1));
+            bd(3, 3) = +std::max(std::min(a(1), b(1)) - range, lowCorner(1));
+            bd(4, 3) = -std::min(std::max(a(2), b(2)) + range, highCorner(2));
+            bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
+
+            valid_pc.clear();
+            for (const Eigen::Vector3d &p : pcd_points)
+            {
+                if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
+                {
+                    valid_pc.emplace_back(p);
+                }
+            }
+            if (valid_pc.empty()) {
+                std::cerr << "No valid points found for the current segment." << std::endl;
+                Eigen::MatrixX4d temp_bp = bd;
+                // firi::shrinkPolygon(temp_bp, _uav_radius);
+                hpolys.emplace_back(temp_bp);
+                continue;
+            }
+
+            Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
+
+            if (ciri.comvexDecomposition(bd, pc, a, b, o, uncertanity) != super_utils::SUCCESS) {
+                std::cerr << "CIRI decomposition failed." << std::endl;
+                continue;
+            }
+
+            geometry_utils::Polytope optimized_poly;
+            ciri.getPolytope(optimized_poly);
+            hp = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+
+            if (hpolys.size() != 0)
+            {
+                const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
+                if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
+                            ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                {
+                    if (ciri.comvexDecomposition(bd, pc, a, a, o, uncertanity) != super_utils::SUCCESS) 
+                    {
+                        std::cerr << "CIRI decomposition failed." << std::endl;
+                        continue;
+                    }
+                    ciri.getPolytope(optimized_poly);
+                    gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+                    hpolys.emplace_back(gap);
+                }
+            }
+            hpolys.emplace_back(hp);
+        }
+    }
+
     inline void shortCut()
     {
         std::vector<Eigen::MatrixX4d> htemp = hpolys;
@@ -560,6 +691,14 @@ private:
         }
     }
 
+    void polygon_dilation(std::vector<Eigen::MatrixX4d> polys)
+    {
+        for(int i=0; i<polys.size(); i++)
+        {
+            firi::shrinkPolygon(polys[i], _search_margin);
+        }
+    }
+
     void traj_generation(Eigen::Vector3d _traj_start_pos, Eigen::Vector3d _traj_start_vel, Eigen::Vector3d _traj_start_acc)
     {
         auto t1 = std::chrono::steady_clock::now();
@@ -591,9 +730,9 @@ private:
         int quadratureRes = 16;
         float weightT = 20.0;
         float smoothingEps = 0.6;
-        float relcostto1 = 1e-1;
+        float relcostto1 = 1e-3;
         _traj.clear();
-        if (!_gCopter.setup(weightT, iniState, finState, hpolys, corridor_points, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, 0.5*_search_margin + _safety_margin, 1.5))
+        if (!_gCopter.setup(weightT, iniState, finState, hpolys, corridor_points, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, 0.5*_search_margin + _safety_margin, 1.5, false))
         {
             std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
             _is_traj_exist = false;
@@ -664,7 +803,7 @@ private:
     {
         _rrtPathPlanner.reset();
         _rrtPathPlanner.setPt(_start_pos, _end_pos, _x_l, _x_h, _y_l, _y_h, _z_l, _z_h,
-                             _sample_range, _max_samples, _sample_portion, _goal_portion);
+                             _sample_range, _max_samples, _sample_portion, _goal_portion, current_yaw);
         _rrtPathPlanner.SafeRegionExpansion(0.05);
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
 
@@ -675,7 +814,9 @@ private:
             _path_vector = matrixToVector(_path);
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
-            convexCover(corridor_points, convexCoverRange, 1.0e-6);
+            // convexCover(corridor_points, convexCoverRange, 1.0e-6);
+            convexCoverCIRI(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+            // polygon_dilation(hpolys);
             // shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -739,7 +880,11 @@ private:
                 getCorridorPoints();
                 auto t1 = std::chrono::steady_clock::now();
 
-                convexCover(corridor_points, convexCoverRange, 1.0e-6);
+                // convexCover(corridor_points, convexCoverRange, 1.0e-6);
+                convexCoverCIRI(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+
+                // polygon_dilation(hpolys);
+
                 // shortCut();
                 auto t2 = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;

@@ -3,7 +3,6 @@
 
 #include <Eigen/Eigen>
 #include <unordered_map>  
-#define inf 9999999.0
 using namespace std;
 
 struct Node;

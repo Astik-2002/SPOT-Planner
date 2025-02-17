@@ -19,7 +19,7 @@ class safeRegionRrtStar
 
 		pcl::search::KdTree<pcl::PointXYZ> kdtreeAddMap;
 		pcl::search::KdTree<pcl::PointXYZ> kdtreeDelMap;
-		//pcl::PointCloud<pcl::PointXYZ> CloudIn;
+		pcl::PointCloud<pcl::PointXYZ> CloudIn;
 		
 		kdtree * kdTree_; // dynamic light-weight Kd-tree, for organizing the nodes in the exploring tree
 
@@ -40,7 +40,7 @@ class safeRegionRrtStar
 		NodePtr root_node;
 
 		// start point,   target point,  centroid point of the ellipsoide sampling region
-		Eigen::Vector3d start_pt, end_pt, inform_centroid, commit_root;
+		Eigen::Vector3d start_pt, end_pt, inform_centroid, commit_root, pcd_origin;
 
 		// ctrl the size of the trash nodes cach, once it's full, remove them and rebuild the kd-tree
 		int cach_size = 100; 
@@ -57,8 +57,9 @@ class safeRegionRrtStar
 		// used for the informed sampling strategy
 		double min_distance, best_distance, elli_l, elli_s, ctheta, stheta;   
 		
+		double current_yaw;
 		// FLAGs
-		bool inform_status, path_exist_status, global_navi_status;
+		bool inform_status, path_exist_status, global_navi_status, uncertanity;
 
 		Eigen::MatrixXd Path;
 		Eigen::VectorXd Radius;
@@ -82,11 +83,11 @@ class safeRegionRrtStar
 		
 		/* set-up functions */
 		void reset();
-		void setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov);
-		void setInput(pcl::PointCloud<pcl::PointXYZ> CloudIn);
+		void setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov , bool uncertanity);
+		void setInput(pcl::PointCloud<pcl::PointXYZ> CloudIn, Eigen::Vector3d origin);
 		void setInputforCollision(pcl::PointCloud<pcl::PointXYZ> CloudIn);
 		void setPt( Eigen::Vector3d startPt, Eigen::Vector3d endPt, double xl, double xh, double yl, double yh, double zl, double zh,
-					double local_range, int max_iter, double sample_portion, double goal_portion );
+					double local_range, int max_iter, double sample_portion, double goal_portion, double yaw);
 		void setStartPt( Eigen::Vector3d startPt, Eigen::Vector3d endPt);
 
 		/*  commit local target and move tree root  */
@@ -128,6 +129,8 @@ class safeRegionRrtStar
 		inline int  checkNodeRelation( double dis, NodePtr node_1, NodePtr node_2 );
 		inline bool isSuccessor(NodePtr curPtr, NodePtr nearPtr);
 		bool checkTrajPtCol(Eigen::Vector3d & pt);
+		Eigen::Vector3d computeNoiseStd(const Eigen::Vector3d& point);
+		bool isInFOV(const Eigen::Vector3d& pt);
 
 		/* data return */
 		pair<Eigen::MatrixXd, Eigen::VectorXd> getPath()

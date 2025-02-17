@@ -48,7 +48,7 @@ class AviaryWrapper(Node):
         timer_freq_hz = 400
         timer_period_sec = 1/timer_freq_hz
         self.R = 0.0
-        self.H = 1.5
+        self.H = 0.8
         self.INIT_XYZS = np.array([[-2, self.R, self.H]])
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
@@ -132,9 +132,9 @@ class AviaryWrapper(Node):
         # Set marker properties
         line_marker.scale.x = 0.05  # Line width
         line_marker.color.a = 1.0  # Alpha
-        line_marker.color.r = 1.0  # Red
+        line_marker.color.r = 0.0  # Red
         line_marker.color.g = 0.0  # Green
-        line_marker.color.b = 0.0  # Blue
+        line_marker.color.b = 1.0  # Blue
 
         # Create trajectory points from x_hist, y_hist, z_hist
         for x, y, z in zip(self.x_hist, self.y_hist, self.z_hist):
@@ -220,6 +220,7 @@ class AviaryWrapper(Node):
         seg_image = obs["0"]["seg"]
         pcd = self.env._pcd_generation(depth_image)
         points = np.asarray(pcd.points)
+        # points_noisy = self.generate_noise(points)
         # points = self.env._pcd_generation_opencv(depth_image)
         # Create header
         header = Header()
@@ -236,7 +237,24 @@ class AviaryWrapper(Node):
         # Create PointCloud2 message
         pointcloud_msg = pc2.create_cloud(header, fields, points)
 
-        # Publish the PointCloud2 message
+
+        # header_noisy = Header()
+        # header_noisy.stamp = self.get_clock().now().to_msg()
+        # header_noisy.frame_id = "base_link"
+
+        # # Define fields for PointCloud2
+        # fields_noisy = [
+        #     PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+        #     PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+        #     PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
+        # ]   
+
+        # # Create PointCloud2 message
+        # noisy_pointcloud_msg = pc2.create_cloud(header_noisy, fields_noisy, points_noisy)
+
+        # # Publish the PointCloud2 message
+        # self.noisy_pcd_pub.publish(noisy_pointcloud_msg)
+        
         self.pcd_pub.publish(pointcloud_msg)
 
 
@@ -284,6 +302,31 @@ class AviaryWrapper(Node):
         goal_pose.pose.position.z = 1.5
         goal.poses.append(goal_pose)
         self.goal_pub.publish(goal)
+
+    def generate_noise(self, points_pcd):
+        s_y = 0.04
+        s_z = 0.04
+        point_noisy = []
+        for point in points_pcd:
+            s_x = self.get_sigma_x(point)
+            a = point[0] + np.random.normal(0, s_x)
+            b = point[1] + np.random.normal(0, s_y)
+            c = point[2] + np.random.normal(0, s_z)
+            noisy_pt = np.array([a, b, c])
+            point_noisy.append(noisy_pt)
+        
+        point_noisy = np.asarray(point_noisy)
+        return point_noisy
+
+    def get_sigma_x(self, point):
+        PI = 3.14
+        x = point[0]
+        s_x = 0.001063 + 0.0007278 * x + 0.003949 * x * x # + (0.022 * x**1.5 * theta) / ((PI / 2 - theta) * (PI / 2 - theta))
+        return s_x
+
+    
+    def compute_incidence(self, point):
+        return math.atan2(math.sqrt(point[0]**2 + point[1]**2), point[2])
 
     def apply_low_pass_filter(self, desired_yaw):
         """Apply low-pass filter to the desired yaw."""

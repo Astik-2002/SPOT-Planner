@@ -195,7 +195,7 @@ class VisionAviary(BaseAviary):
         
         nearVal = self.L
         farVal = 1000
-        clip_distance = 20
+        clip_distance = 12
         depth_mm = (2 * nearVal * farVal) / (farVal + nearVal - depth_image * (farVal - nearVal))
         
         height, width = depth_image.shape
@@ -387,13 +387,13 @@ class VisionAviary(BaseAviary):
         # super()._addObstacles()
         less = False
         if not less:
-            num_trees= 60
+            num_trees= 30
             x_bounds=(0.5, 55.5)
             y_bounds=(-7, 7)
             
             base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
             tree_urdf = os.path.join(base_path, "simple_tree.urdf")
-
+            np.random.seed(42)
             # Add trees randomly within the specified bounds
             for _ in range(num_trees):
                 # Generate random x and y coordinates within the specified bounds

@@ -26,6 +26,7 @@
 #include <tf2_sensor_msgs/tf2_sensor_msgs.hpp>
 #include "geometry_msgs/msg/pose_stamped.hpp"
 
+#include "rrt_path_finder/ciri.h"
 #include "rrt_path_finder/firi.hpp"
 #include "rrt_path_finder/gcopter.hpp"
 #include "rrt_path_finder/trajectory.hpp"
@@ -50,6 +51,7 @@ public:
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
         this->declare_parameter("safety_margin", 0.7);
+        this->declare_parameter("uav_size", 0.6);
         this->declare_parameter("search_margin", 0.4);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
@@ -81,6 +83,7 @@ public:
 
         // Read parameters
         _safety_margin = this->get_parameter("safety_margin").as_double();
+        _uav_size = this->get_parameter("uav_size").as_double();
         _search_margin = this->get_parameter("search_margin").as_double();
         _max_radius = this->get_parameter("max_radius").as_double();
         _sample_range = this->get_parameter("sample_range").as_double();
@@ -130,7 +133,7 @@ public:
         _dest_pts_sub = this->create_subscription<nav_msgs::msg::Path>(
             "waypoints", 1, std::bind(&PointCloudPlanner::rcvWaypointsCallBack, this, std::placeholders::_1));
         _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
+            "noisy_pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
         _odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom", 10, std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1));
 
@@ -173,7 +176,7 @@ private:
     tf2_ros::TransformListener tf_listener_;
 
     // Path Planning Parameters
-    double _planning_rate, _safety_margin, _search_margin, _max_radius, _sample_range, _replan_distance;
+    double _planning_rate, _safety_margin, _search_margin, _max_radius, _sample_range, _replan_distance, _uav_size;
     double _refine_portion, _sample_portion, _goal_portion, _path_find_limit, _stop_time, _time_commit;
     double _x_l, _x_h, _y_l, _y_h, _z_l, _z_h, _z_l2, _z_h2;  // For random map simulation: map boundary
     
@@ -189,7 +192,7 @@ private:
     float smoothingEps = 0.01;
     float relcostto1 = 0.00001;
     int _max_samples;
-    double _commit_distance = 8.0;
+    double _commit_distance = 6.0;
     double max_vel = 0.5;
     float threshold = 0.8;
     int trajectory_id = 0;
@@ -228,6 +231,7 @@ private:
     bool _is_target_receive = false;
     bool _is_has_map = false;
     bool _is_complete = false;
+    bool uncertanity_compensation = false;
 
 
     // ROS 2-compatible callback functions
@@ -250,7 +254,7 @@ private:
     // Initializing rrt parameters
     void setRRTPlannerParams()
     {
-        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 60, 60);
+        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 60, 60, uncertanity_compensation);
         _rrtPathPlanner.reset();
     }
 
@@ -387,7 +391,7 @@ private:
                 pcd_points.push_back(p24);
             }
         }
-        _rrtPathPlanner.setInput(cloud_input);
+        _rrtPathPlanner.setInput(cloud_input, _start_pos);
         _rrtPathPlanner.setInputforCollision(cloud_input);
         //RCLCPP_WARN(this->get_logger(), "Point Cloud received");
         
@@ -513,6 +517,108 @@ private:
 
     }
 
+    void convexCoverCIRI(const std::vector<Eigen::Vector3d> &path, 
+        const double &range,
+        std::vector<Eigen::MatrixX4d> &hpolys,
+        const Eigen::Vector3d &o,
+        bool uncertanity,
+        const double eps)
+    {
+        Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
+        Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
+
+        hpolys.clear();
+        int n = int(path.size());
+        
+        Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+        bd(0, 0) = 1.0;
+        bd(1, 0) = -1.0;
+        bd(2, 1) = 1.0;
+        bd(3, 1) = -1.0;
+        bd(4, 2) = 1.0;
+        bd(5, 2) = -1.0;
+
+        Eigen::MatrixX4d hp, gap;
+        Eigen::MatrixX3d tangent_pcd1, tangent_pcd2;
+        Eigen::Vector3d a(path[0][0], path[0][1], path[0][2]);
+        Eigen::Vector3d b = a;
+        std::vector<Eigen::Vector3d> valid_pc;
+        std::vector<Eigen::Vector3d> bs;
+        valid_pc.reserve(pcd_points.size());
+        super_planner::CIRI ciri;
+        ciri.setupParams(_uav_size, 4); // Setup CIRI with robot radius and iteration number
+
+        for (int i = 0; i < n;)
+        {
+            if(uncertanity)
+            {
+                std::cout<<"[ciri debug] stochastic polygons "<<std::endl;
+            }
+            else
+            {
+                std::cout<<"[ciri debug] deterministic polygons "<<std::endl;
+            }
+
+            Eigen::Vector3d path_point = path[i];
+            a = b;
+            b = path_point;
+            i++;
+            bs.emplace_back(b);
+
+            bd(0, 3) = -std::min(std::max(a(0), b(0)) + range, highCorner(0));
+            bd(1, 3) = +std::max(std::min(a(0), b(0)) - range, lowCorner(0));
+            bd(2, 3) = -std::min(std::max(a(1), b(1)) + range, highCorner(1));
+            bd(3, 3) = +std::max(std::min(a(1), b(1)) - range, lowCorner(1));
+            bd(4, 3) = -std::min(std::max(a(2), b(2)) + range, highCorner(2));
+            bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
+
+            valid_pc.clear();
+            for (const Eigen::Vector3d &p : pcd_points)
+            {
+                if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
+                {
+                    valid_pc.emplace_back(p);
+                }
+            }
+            if (valid_pc.empty()) {
+                std::cerr << "No valid points found for the current segment." << std::endl;
+                Eigen::MatrixX4d temp_bp = bd;
+                // firi::shrinkPolygon(temp_bp, _uav_radius);
+                hpolys.emplace_back(temp_bp);
+                continue;
+            }
+
+            Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
+
+            if (ciri.comvexDecomposition(bd, pc, a, b, o, uncertanity) != super_utils::SUCCESS) {
+                std::cerr << "CIRI decomposition failed." << std::endl;
+                continue;
+            }
+
+            geometry_utils::Polytope optimized_poly;
+            ciri.getPolytope(optimized_poly);
+            hp = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+
+            if (hpolys.size() != 0)
+            {
+                const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
+                if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
+                            ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                {
+                    if (ciri.comvexDecomposition(bd, pc, a, a, o, uncertanity) != super_utils::SUCCESS) 
+                    {
+                        std::cerr << "CIRI decomposition failed." << std::endl;
+                        continue;
+                    }
+                    ciri.getPolytope(optimized_poly);
+                    gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+                    hpolys.emplace_back(gap);
+                }
+            }
+            hpolys.emplace_back(hp);
+        }
+    }
+
     inline void shortCut()
     {
         std::vector<Eigen::MatrixX4d> htemp = hpolys;
@@ -551,6 +657,14 @@ private:
         for (const auto &ele : idices)
         {
             hpolys.push_back(htemp[ele]);
+        }
+    }
+    
+    void polygon_dilation(std::vector<Eigen::MatrixX4d> polys)
+    {
+        for(int i=0; i<polys.size(); i++)
+        {
+            firi::shrinkPolygon(polys[i], _uav_size);
         }
     }
 
@@ -658,7 +772,7 @@ private:
     {
         _rrtPathPlanner.reset();
         _rrtPathPlanner.setPt(_start_pos, _end_pos, _x_l, _x_h, _y_l, _y_h, _z_l, _z_h,
-                             _sample_range, _max_samples, _sample_portion, _goal_portion);
+                             _sample_range, _max_samples, _sample_portion, _goal_portion, 0.0);
         _rrtPathPlanner.SafeRegionExpansion(0.05);
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
 
@@ -670,6 +784,7 @@ private:
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
             convexCover(corridor_points, convexCoverRange, 1.0e-6);
+            polygon_dilation(hpolys);
             // shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -735,6 +850,7 @@ private:
                 auto t1 = std::chrono::steady_clock::now();
 
                 convexCover(corridor_points, convexCoverRange, 1.0e-6);
+                polygon_dilation(hpolys);
                 // shortCut();
                 auto t2 = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;

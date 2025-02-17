@@ -135,6 +135,10 @@ public:
             std::cout<<"case Add"<<std::endl;
             handleAddTrajectory(msg);
             break;
+        case custom_interface_gym::msg::DesTrajectory::ACTION_BACKUP:
+            std::cout<<"case backup"<<std::endl;
+            handleBackupTrajectory(msg);
+            break;
         case custom_interface_gym::msg::DesTrajectory::ACTION_WARN_FINAL:
             std::cout<<"case Final"<<std::endl;
             handleFinalTrajectory();
@@ -181,8 +185,6 @@ public:
             std::chrono::duration<double> duration_in_sec(segment_durations[i]);
             rclcpp::Duration rcl_duration(duration_in_sec);
 
-            // Add the duration to _final_time
-            _final_time += rcl_duration;
         }
         // for (auto mat : current_coefficients)
         // {
@@ -193,6 +195,42 @@ public:
         std::cout<<"in handle add trajectory callback, traj set successfully"<<std::endl;
 
         // RCLCPP_WARN(this->get_logger(), "Added trajectory with %lu segments.", msg->num_segment);
+        
+    }
+
+    void handleBackupTrajectory(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
+    {
+        std::cout<<"in handle backup trajectory callback"<<std::endl;
+        has_trajectory = true;
+        is_aborted = false;
+        hover_command_sent = false;
+        _traj.clear();
+        trajectory_id = msg->trajectory_id;
+        _start_time = msg->header.stamp;
+        _final_time = _start_time;
+        segment_durations.clear();
+        current_coefficients.clear();
+        segment_durations = msg->duration_vector;
+        num_segments = msg->num_segment;
+        order = msg->num_order;
+
+        std::vector<double> array_msg_traj;
+        array_msg_traj = msg->matrices_flat;
+
+        for (int i = 0; i < segment_durations.size(); ++i) 
+        {
+            Eigen::Map<const Eigen::Matrix<double, 3, 6, Eigen::RowMajor>> matrix(
+            array_msg_traj.data() + i * 3 * 6); // Starting point in the vector
+
+            // Store the matrix in the output vector
+            current_coefficients.push_back(matrix);
+
+            std::chrono::duration<double> duration_in_sec(segment_durations[i]);
+            rclcpp::Duration rcl_duration(duration_in_sec);
+
+        }
+        _traj.setParameters(segment_durations, current_coefficients);
+        std::cout<<"in handle backup trajectory callback, traj set successfully"<<std::endl;
         
     }
 
@@ -294,18 +332,27 @@ public:
         }
         // Get elapsed time
         double elapsed = (this->get_clock()->now() - _start_time).seconds();
-
-        if (elapsed > _final_time.seconds())
+        Eigen::Vector3d des_pos;
+        Eigen::Vector3d des_vel;
+        Eigen::Vector3d des_Acc;
+        Eigen::Vector3d des_jerk;
+        
+        if (elapsed > _traj.getTotalDuration())
         {
             // RCLCPP_WARN_THROTTLE(this->get_logger(), 1.0, "Trajectory completed. Waiting for new trajectory...");
-            has_trajectory = false;
-            return;
+            des_pos = _traj.getPos(_traj.getTotalDuration());
+            des_vel = _traj.getVel(_traj.getTotalDuration());
+            des_Acc = _traj.getAcc(_traj.getTotalDuration());
+            des_jerk = _traj.getJer(_traj.getTotalDuration());
+        }
+        else
+        {
+            des_pos = _traj.getPos(elapsed);
+            des_vel = _traj.getVel(elapsed);
+            des_Acc = _traj.getAcc(elapsed);
+            des_jerk = _traj.getJer(elapsed);
         }
 
-        Eigen::Vector3d des_pos = _traj.getPos(elapsed);
-        Eigen::Vector3d des_vel = _traj.getVel(elapsed);
-        Eigen::Vector3d des_Acc = _traj.getAcc(elapsed);
-        Eigen::Vector3d des_jerk = _traj.getJer(elapsed);
         // std::cout<<"elapsed: "<<elapsed<<std::endl;
         custom_interface_gym::msg::TrajMsg traj_msg;
         traj_msg.header.stamp = rclcpp::Clock().now();

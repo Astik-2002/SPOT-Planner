@@ -457,7 +457,12 @@ namespace gcopter
                         }
                         else
                         {
-                            if (smoothedL1Corridor(violaPos, smoothFactor, safety_margin, violaPosPena, violaPosPenaD))
+                            // if (smoothedL1Corridor(violaPos, smoothFactor, safety_margin, violaPosPena, violaPosPenaD))
+                            // {
+                            //     gradPos += weightPos * violaPosPenaD * outerNormal;
+                            //     pena += weightPos * violaPosPena;
+                            // }
+                            if (smoothedL1(violaPos, smoothFactor, violaPosPena, violaPosPenaD))
                             {
                                 gradPos += weightPos * violaPosPenaD * outerNormal;
                                 pena += weightPos * violaPosPena;
@@ -604,31 +609,32 @@ namespace gcopter
                 {
                     gradP.col(i - 1) -= d / smoothedDistance;
                 }
-                if(node_biasing)
-                {
-                    if (i > 0 && i <= overlaps) // Skip start and end points
-                    {
-                        // Find the closest point in rrt_vec
-                        Eigen::Vector3d closest_rrt_point;
-                        double minDist = std::numeric_limits<double>::max();
-                        for (const Eigen::Vector3d &p : rrt_path)
-                        {
-                            double dist = (b - p).squaredNorm();
-                            if (dist < minDist)
-                            {
-                                minDist = dist;
-                                closest_rrt_point = p;
-                            }
-                        }
 
-                        // Compute correspondence cost
-                        Eigen::Vector3d diff = b - closest_rrt_point;
-                        cost += lambda_rrt * diff.squaredNorm();
+                // if(node_biasing)
+                // {
+                //     if (i > 0 && i <= overlaps) // Skip start and end points
+                //     {
+                //         // Find the closest point in rrt_vec
+                //         Eigen::Vector3d closest_rrt_point;
+                //         double minDist = std::numeric_limits<double>::max();
+                //         for (const Eigen::Vector3d &p : rrt_path)
+                //         {
+                //             double dist = (b - p).squaredNorm();
+                //             if (dist < minDist)
+                //             {
+                //                 minDist = dist;
+                //                 closest_rrt_point = p;
+                //             }
+                //         }
 
-                        // Add gradient for correspondence cost
-                        gradP.col(i - 1) += 2.0 * lambda_rrt * diff;
-                    }
-                }
+                //         // Compute correspondence cost
+                //         Eigen::Vector3d diff = b - closest_rrt_point;
+                //         cost += lambda_rrt * diff.squaredNorm();
+
+                //         // Add gradient for correspondence cost
+                //         gradP.col(i - 1) += 2.0 * lambda_rrt * diff;
+                //     }
+                // }
             }
 
             Eigen::VectorXd unitQ;
@@ -894,17 +900,13 @@ namespace gcopter
         inline double optimize(Trajectory<5> &traj,
                                const double &relCostTol)
         {
-            auto t0 = std::chrono::steady_clock::now();
 
             Eigen::VectorXd x(temporalDim + spatialDim);
             Eigen::Map<Eigen::VectorXd> tau(x.data(), temporalDim);
             Eigen::Map<Eigen::VectorXd> xi(x.data() + temporalDim, spatialDim);
             setInitial(shortPath, allocSpeed, pieceIdx, points, times);
-            auto t1 = std::chrono::steady_clock::now();
             backwardT(times, tau);
-            auto t2 = std::chrono::steady_clock::now();
             backwardP(points, vPolyIdx, vPolytopes, xi);
-            auto t3 = std::chrono::steady_clock::now();
 
             double minCostFunctional;
             lbfgs_params.mem_size = 16;
@@ -920,7 +922,6 @@ namespace gcopter
                                             nullptr,
                                             this,
                                             lbfgs_params);
-            auto t4 = std::chrono::steady_clock::now();
             if (ret >= 0)
             {
                 forwardT(tau, times);
