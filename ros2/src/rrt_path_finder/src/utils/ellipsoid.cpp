@@ -202,3 +202,20 @@ bool Ellipsoid::inside(const Vec3f &pt) const {
 }
 
 
+Eigen::Vector4d Ellipsoid::computeTangentPlane(const Eigen::Vector3d &pt) const {
+
+    // Compute the normal vector (gradient of the implicit equation)
+    Eigen::Vector3d normal = -2.0 * C_inv_*C_inv_.transpose() * (pt - d_);
+
+    // Normalize the normal vector
+    normal.normalize();
+
+    // Compute the offset of the tangent plane
+    float offset = -normal.dot(pt);
+
+    // Return the tangent plane as a 4D vector (normal, offset)
+    Eigen::Vector4d tangentPlane;
+    tangentPlane << normal, offset;
+    return tangentPlane;
+}
+

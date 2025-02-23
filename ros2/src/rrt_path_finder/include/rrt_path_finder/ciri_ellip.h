@@ -62,7 +62,7 @@ namespace super_planner {
     using geometry_utils::Ellipsoid;
     using geometry_utils::Polytope;
 
-    class CIRI {
+    class CIRI_e {
         double robot_r_{0};
         int iter_num_{1};
         bool debug_en{false};
@@ -92,6 +92,15 @@ namespace super_planner {
                                              const Eigen::Vector3d &pass_point,
                                              const Eigen::Vector3d &seed_p,
                                              Eigen::Vector4d &outter_plane);
+        
+        
+        static void findTangentPlaneOfEllipsoid(const Ellipsoid obstacle, 
+                                             const Eigen::Vector3d& pass_point,
+                                             const Eigen::Vector3d& seed_p,
+                                             Eigen::Vector4d& outer_plane);
+            
+        
+        double checkTangency(const Ellipsoid& E, const Eigen::Vector4d& plane);
 
         static double distancePointToSegment(const Eigen::Vector3d& P, const Eigen::Vector3d& A, const Eigen::Vector3d& B) {
             // 计算向量 AB 和 AP
@@ -118,30 +127,33 @@ namespace super_planner {
         }
 
     public:
-        CIRI();
+        CIRI_e();
 
-        // CIRI(){
+        // CIRI_e(){
         //     debug_en = true;
-        //     // const std::string failed_log_path = DEBUG_FILE_DIR("ciri_failed_log.csv");
+        //     // const std::string failed_log_path = DEBUG_FILE_DIR("CIRI_e_failed_log.csv");
         //     // failed_log.open(failed_log_path, std::ios::out | std::ios::trunc);
         // }
 
-        ~CIRI();
+        ~CIRI_e();
 
-        typedef std::shared_ptr<CIRI> Ptr;
+        typedef std::shared_ptr<CIRI_e> Ptr;
 
         void setupParams(double robot_r, int iter_num);
 
         RET_CODE convexDecomposition(const Eigen::MatrixX4d &bd,
                                      const Eigen::Matrix3Xd &pc,
                                      const Eigen::Vector3d &a,
-                                     const Eigen::Vector3d &b);
+                                     const Eigen::Vector3d &b,
+                                     const Eigen::Vector3d &o,
+                                     std::vector<Ellipsoid> &tangent_obs,
+                                     bool uncertanity);
 
         void getPolytope(Polytope &optimized_poly);
         double computeThetaY(const Eigen::Vector3d& point);
         Eigen::Vector3d computeNoiseStd(const Eigen::Vector3d& point);
         Eigen::Matrix3Xd computePointCloudNoise(const Eigen::Matrix3Xd& pointCloud, const Eigen::Vector3d &o);
-        void findTangentPlaneOfEllipsoid(const Ellipsoid obstacle, const Eigen::Vector3d& pass_point, const Eigen::Vector3d& seed_p, Eigen::Vector4d& outer_plane);
+        double planeIntersectsEllipsoid(const Ellipsoid &ellip, const Eigen::Vector4d &plane);
 
     };
 }

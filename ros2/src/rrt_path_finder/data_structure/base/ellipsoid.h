@@ -119,5 +119,7 @@ namespace geometry_utils {
         /// Check if the point is inside, non-exclusive
         bool inside(const Vec3f& pt) const;
 
+        Eigen::Vector4d computeTangentPlane(const Eigen::Vector3d &pt) const;
+
     };
 }

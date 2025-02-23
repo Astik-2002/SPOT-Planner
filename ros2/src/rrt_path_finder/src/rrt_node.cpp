@@ -590,7 +590,7 @@ private:
 
             Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
 
-            if (ciri.comvexDecomposition(bd, pc, a, b, o, uncertanity) != super_utils::SUCCESS) {
+            if (ciri.convexDecomposition(bd, pc, a, b) != super_utils::SUCCESS) {
                 std::cerr << "CIRI decomposition failed." << std::endl;
                 continue;
             }
@@ -605,7 +605,7 @@ private:
                 if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
                             ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
                 {
-                    if (ciri.comvexDecomposition(bd, pc, a, a, o, uncertanity) != super_utils::SUCCESS) 
+                    if (ciri.convexDecomposition(bd, pc, a, a) != super_utils::SUCCESS) 
                     {
                         std::cerr << "CIRI decomposition failed." << std::endl;
                         continue;
@@ -701,7 +701,7 @@ private:
         float smoothingEps = 0.6;
         float relcostto1 = 1e-3;
         _traj.clear();
-        if (!_gCopter.setup(weightT, iniState, finState, hpolys, corridor_points, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, _safety_margin, 0.1))
+        if (!_gCopter.setup(weightT, iniState, finState, hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams))
         {
             std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
             _is_traj_exist = false;

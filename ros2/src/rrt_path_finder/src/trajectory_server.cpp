@@ -91,7 +91,13 @@ public:
         current_pos[0] = _odom.pose.pose.position.x;
         current_pos[1] = _odom.pose.pose.position.y;
         current_pos[2] = _odom.pose.pose.position.z;
-
+        if(_is_target_receive)
+        {
+            if((end_pos-current_pos).norm() < 2.0)
+            {
+                _is_goal_arrive = true;
+            }
+        }
         auto& orientation = _odom.pose.pose.orientation;
         double siny_cosp = 2.0 * (orientation.w * orientation.z + orientation.x * orientation.y);
         double cosy_cosp = 1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z);
@@ -321,12 +327,13 @@ public:
             traj_msg.position.x = end_pos[0];
             traj_msg.position.y = end_pos[1];
             traj_msg.position.z = end_pos[2];
+            
             std::cout<<"[Goal setting] current position: "<<current_pos[0]<<":"<<current_pos[1]<<":"<<current_pos[2]<<std::endl;
             std::cout<<"[Goal setting] command position: "<<traj_msg.position.x<<":"<<traj_msg.position.y<<":"<<traj_msg.position.z<<std::endl;
 
             // Publish the message
             traj_msg.hover = true;
-            command_pub->publish(traj_msg); // Replace traj_publisher_ with your actual publisher variable
+            command_pub->publish(traj_msg);
 
             return;
         }

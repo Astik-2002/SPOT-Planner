@@ -36,6 +36,7 @@ from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 from custom_interface_gym.msg import TrajMsg
+import csv, math
 
 
 class AviaryWrapper(Node):
@@ -52,7 +53,7 @@ class AviaryWrapper(Node):
         self.INIT_XYZS = np.array([[-2, self.R, self.H]])
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
-
+        self.goal_pos = np.array([[50.0, 0.0, 1.5]]).flatten()
 
         self.env = VisionAviary(drone_model=DroneModel.CF2X,
                            num_drones=1,
@@ -80,7 +81,7 @@ class AviaryWrapper(Node):
         self.rgb_pub = self.create_publisher(Image,'rgb_image',1)
         self.goal_pub = self.create_publisher(Path,'waypoints',1)
         self.seg_pub = self.create_publisher(Image,'segmentation_image',1)
-
+        self.log_set = False
         self.bridge = CvBridge()
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.timer = self.create_timer(timer_period_sec, self.step_callback)
@@ -297,9 +298,9 @@ class AviaryWrapper(Node):
         goal_pose = PoseStamped()
         goal_pose.header.stamp = self.get_clock().now().to_msg()
         goal_pose.header.frame_id = "ground_link"
-        goal_pose.pose.position.x = 50.0
-        goal_pose.pose.position.y = 0.0
-        goal_pose.pose.position.z = 1.5
+        goal_pose.pose.position.x = self.goal_pos[0]
+        goal_pose.pose.position.y = self.goal_pos[1]
+        goal_pose.pose.position.z = self.goal_pos[2]
         goal.poses.append(goal_pose)
         self.goal_pub.publish(goal)
 
@@ -355,18 +356,37 @@ class AviaryWrapper(Node):
         if(msg.hover):
             if not self.is_hover_pos_set:
                 self.hover_pos = self.pos + 0.01
-                print('hover position set')
-                print('current_pos: ',self.pos, 'hover_pos: ',self.hover_pos)
+                # print('hover position set')
+                # print('current_pos: ',self.pos, 'hover_pos: ',self.hover_pos)
                 self.is_hover_pos_set = True
             
             self.des_pos = self.hover_pos
             return
         else:
+            if(np.linalg.norm(self.goal_pos - self.pos.flatten()) < 3.0):
+                if not self.log_set: 
+                    self.log_set = True
+                    if len(self.x_hist) > 1:
+                        total_length = 0
+                        for i in range(1, len(self.x_hist)):
+                            dx = self.x_hist[i] - self.x_hist[i-1]
+                            dy = self.y_hist[i] - self.y_hist[i-1]
+                            dz = self.z_hist[i] - self.z_hist[i-1]
+                            total_length += math.sqrt(dx**2 + dy**2 + dz**2)
+                        print("Total trajectory length:", total_length)
+                        self.des_pos = self.goal_pos.flatten()
+                        # with open("ellipsoid_ex1_env6.csv", "w", newline="") as f:
+                        #     writer = csv.writer(f)
+                        #     writer.writerow(["x", "y", "z"])
+                        #     for x, y, z in zip(self.x_hist, self.y_hist, self.z_hist):
+                        #         writer.writerow([x, y, z])
+                        return
+    
             self.is_hover_pos_set = False
             self.des_pos = np.array([[msg.position.x, msg.position.y, msg.position.z]]).flatten()
             self.des_vel = np.array([[msg.velocity.x, msg.velocity.y, msg.velocity.z]]).flatten()
             self.des_yaw = msg.yaw
-            print("current command yaw", msg.yaw)
+            # print("current command yaw", msg.yaw)
             
 
 
