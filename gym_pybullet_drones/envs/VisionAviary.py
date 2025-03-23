@@ -8,6 +8,7 @@ from gym_pybullet_drones.envs.BaseAviary import BaseAviary
 from gym_pybullet_drones.utils.enums import DroneModel, Physics, ImageType
 from scipy.spatial.transform import Rotation as R
 import random
+import csv
 
 class VisionAviary(BaseAviary):
     """Multi-drone environment class for control applications using vision."""
@@ -80,7 +81,7 @@ class VisionAviary(BaseAviary):
         self.VID_WIDTH=int(640)
         self.VID_HEIGHT=int(480)
         
-        self.projection_matrix = p.computeProjectionMatrixFOV(fov=90.0,
+        self.projection_matrix = p.computeProjectionMatrixFOV(fov=60.0,
                                                             aspect=self.VID_WIDTH/self.VID_HEIGHT,
                                                             nearVal=0.1,
                                                             farVal=1000.0
@@ -195,12 +196,12 @@ class VisionAviary(BaseAviary):
         
         nearVal = self.L
         farVal = 1000
-        clip_distance = 12
+        clip_distance = 6
         depth_mm = (2 * nearVal * farVal) / (farVal + nearVal - depth_image * (farVal - nearVal))
         
         height, width = depth_image.shape
         aspect = width/height
-        fov = 90    
+        fov = 60    
         
         fx = width / (2*np.tan(np.radians(fov / 2)))
         fy = height / (2*np.tan(np.radians(fov / 2)))
@@ -251,9 +252,9 @@ class VisionAviary(BaseAviary):
         else:
             pcd = o3d.geometry.PointCloud.create_from_depth_image(depth_o3d, intrinsic, extrinsic)
         
-        distances = np.linalg.norm(np.asarray(pcd.points), axis=1)
-        indices = np.where((distances <= clip_distance))[0]
-        pcd = pcd.select_by_index(indices)
+        # distances = np.linalg.norm(np.asarray(pcd.points), axis=1)
+        # indices = np.where((distances <= clip_distance))[0]
+        # pcd = pcd.select_by_index(indices)
         return pcd
     
     ################################################################################
@@ -387,31 +388,57 @@ class VisionAviary(BaseAviary):
         # super()._addObstacles()
         less = False
         if not less:
-            num_trees= 30
+            num_trees= 80
             x_bounds=(0.5, 55.5)
-            y_bounds=(-7, 7)
+            y_bounds=(-7.0, 7.0)
             
             base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
             tree_urdf = os.path.join(base_path, "simple_tree.urdf")
             np.random.seed(42)
             # Add trees randomly within the specified bounds
-            for _ in range(num_trees):
-                # Generate random x and y coordinates within the specified bounds
-                x_pos = random.uniform(x_bounds[0], x_bounds[1])
-                y_pos = random.uniform(y_bounds[0], y_bounds[1])
+            # for _ in range(num_trees):
+            #     # Generate random x and y coordinates within the specified bounds
+            #     x_pos = random.uniform(x_bounds[0], x_bounds[1])
+            #     y_pos = random.uniform(y_bounds[0], y_bounds[1])
 
-                # Randomly place the tree at this location, z is fixed (0 for ground level)
-                pos = (x_pos, y_pos, 0.0)
+            #     # Randomly place the tree at this location, z is fixed (0 for ground level)
+            #     pos = (x_pos, y_pos, 0.0)
 
-                # Load the tree URDF at the generated position
-                if os.path.exists(tree_urdf):
-                    p.loadURDF(tree_urdf,
-                            pos,
-                            p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
-                            useFixedBase=True,
-                            physicsClientId=self.CLIENT)
-                else:
-                    print(f"File not found: {tree_urdf}")
+            #     # Load the tree URDF at the generated position
+            #     if os.path.exists(tree_urdf):
+            #         p.loadURDF(tree_urdf,
+            #                 pos,
+            #                 p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
+            #                 useFixedBase=True,
+            #                 physicsClientId=self.CLIENT)
+            #     else:
+            #         print(f"File not found: {tree_urdf}")
+            output_dir = "/home/astik/gym-pybullet-drones/gym_pybullet_drones/envs/obstacle_pos"
+            csv_file = os.path.join(output_dir, "environment_35.csv")
+            try:
+                with open(csv_file, newline="") as f:
+                    reader = csv.reader(f)
+                    # Skip header row if present
+                    next(reader, None)
+                    for row in reader:
+                        if len(row) < 4:
+                            continue
+                        tree_id = row[0]
+                        x_pos = float(row[1])
+                        y_pos = float(row[2])
+                        z_pos = float(row[3])
+                        pos = (x_pos, y_pos, z_pos)
+                        # print(f"Tree {tree_id} at position {pos}")
+                        if os.path.exists(tree_urdf):
+                            p.loadURDF(tree_urdf,
+                                    pos,
+                                    p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
+                                    useFixedBase=True,
+                                    physicsClientId=self.CLIENT)
+                        else:
+                            print(f"File not found: {tree_urdf}")
+            except Exception as e:
+                print(f"Error reading {csv_file}: {e}")
         
         else:
             base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')

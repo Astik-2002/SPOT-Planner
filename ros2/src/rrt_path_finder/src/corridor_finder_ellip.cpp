@@ -11,6 +11,30 @@ safeRegionRrtStarEllip::safeRegionRrtStarEllip( ){
 
 safeRegionRrtStarEllip::~safeRegionRrtStarEllip(){ }
 
+super_utils::Mat3f safeRegionRrtStarEllip::computeCovariance(const Eigen::Vector3d& point)
+{
+    super_utils::Mat3f R_tf;
+    R_tf << 0, 0, 1,
+    1, 0, 0,
+    0, 1, 0;
+
+    super_utils::Mat3f R_tf_inv = R_tf.inverse();
+    Eigen::Vector3d point_cam = R_tf_inv * point;
+    double x = point_cam[0], y = point_cam[1], z = point_cam[2];
+    // double k1 = 0.04;
+    // double sz = 0.001063 + 0.0007278 * z + 0.003949 * z * z;
+    double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
+    double k1 = 0.0016;
+    double k12 = k1*k1;
+    super_utils::Mat3f Sigma;
+    Sigma << k12 + pow(x*sz/z,2), x*y*pow(sz/z,2), x/z*pow(sz,2),
+    x*y*pow(sz/z,2), k12 + pow(y*sz/z,2), y/z*pow(sz,2),
+    x/z*pow(sz,2), y/z*pow(sz,2), pow(sz,2) ;
+
+    Sigma = R_tf * Sigma * R_tf.transpose();
+    return Sigma;
+}
+
 Eigen::Vector3d safeRegionRrtStarEllip::computeNoiseStd(const Eigen::Vector3d& point) {
     double x = point.x();
     // Compute axial noise (σx) using the formula from the paper
@@ -23,9 +47,10 @@ Eigen::Vector3d safeRegionRrtStarEllip::computeNoiseStd(const Eigen::Vector3d& p
     return Eigen::Vector3d(sigma_x, sigma_y, sigma_z);
 }
 
-void safeRegionRrtStarEllip::setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov_, bool uncertanity_ )
+void safeRegionRrtStarEllip::setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov_, bool uncertanity_, double _uav_radius )
 {   
     std::cout<<"set param called"<<std::endl;
+    uav_radius = _uav_radius;
     safety_margin = safety_margin_;
     search_margin = search_margin_;
     max_radius    = max_radius_;
@@ -177,7 +202,15 @@ inline double safeRegionRrtStarEllip::radiusSearch(Vector3d & search_Pt)
     Eigen::Vector3d obs{nearest_obstacle.x, nearest_obstacle.y, nearest_obstacle.z};
     Eigen::Vector3d obs_camera_frame = obs - pcd_origin;
     Eigen::Vector3d std_dev_vector = computeNoiseStd(obs_camera_frame);  // [a, b, c]
-
+    super_utils::Mat3f covariance = computeCovariance(obs);
+    Eigen::JacobiSVD<Eigen::Matrix3d, Eigen::FullPivHouseholderQRPreconditioner> svd(covariance, Eigen::ComputeFullU);
+    Eigen::Matrix3d U = svd.matrixU();
+    Eigen::Vector3d S = svd.singularValues();
+    auto R_ = U;
+    S[0] = (S[0])*sqrt(11.35) + uav_radius;
+    S[1] = (S[1])*sqrt(11.35) + uav_radius;
+    S[2] = (S[2])*sqrt(11.35) + uav_radius;
+    covariance = R_ * S.asDiagonal() * R_.transpose();
     // Compute direction vector (search_Pt - obs)
     Eigen::Vector3d direction = search_Pt - obs;
     double distance = direction.norm();
@@ -187,10 +220,11 @@ inline double safeRegionRrtStarEllip::radiusSearch(Vector3d & search_Pt)
     direction.normalize();  // Convert to unit vector
 
     // Compute ellipsoid extent along direction
-    Eigen::Vector3d inv_radii = std_dev_vector.cwiseInverse().array().square();
-    double ellipsoid_extent = 1.0 / sqrt(direction.transpose() * inv_radii.asDiagonal() * direction);
-
+    // Eigen::Vector3d inv_radii = std_dev_vector.cwiseInverse().array().square();
+    double ellipsoid_extent = 1.0 / sqrt(direction.transpose() * covariance.inverse() * direction);
+    // std::cout<<"[ellip debug] ellipsoid_extent: "<<ellipsoid_extent<<std::endl;
     // Compute final radius
+
     double radius = sqrt(pointRadiusSquaredDistance[0]) - ellipsoid_extent;
     return min(radius, double(max_radius));
 }
@@ -379,6 +413,11 @@ void safeRegionRrtStarEllip::resetRoot(Vector3d & target_coord)
             root_index = i;
         }
     }
+    if (root_node == temp_root) 
+    {
+        std::cout << "[Debug] New root is the same as the previous root. No change needed." << std::endl;
+        return; // Avoid unnecessary reassignments
+    }    
     if(root_index < PathList.size() && temp_root != NULL)
     {
         std::cout<<"[segmentation error debug] commit target: "<<target_coord.transpose()<<std::endl;

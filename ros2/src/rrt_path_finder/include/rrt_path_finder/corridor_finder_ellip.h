@@ -54,7 +54,7 @@ class safeRegionRrtStarEllip
 		double x_l, x_h, y_l, y_h, z_l, z_h, bias_l, bias_h, inlier_ratio, goal_ratio;
 		
 		// used for range query and search strategy
-		double safety_margin, max_radius, search_margin, sample_range;
+		double safety_margin, max_radius, search_margin, sample_range, uav_radius;
 		
 		// used for the informed sampling strategy
 		double min_distance, best_distance, elli_l, elli_s, ctheta, stheta;   
@@ -85,12 +85,13 @@ class safeRegionRrtStarEllip
 		
 		/* set-up functions */
 		void reset();
-		void setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov , bool uncertanity);
+		void setParam( double safety_margin_, double search_margin_, double max_radius_, double sample_range_, double h_fov_, double v_fov , bool uncertanity, double _uav_radius);
 		void setInput(pcl::PointCloud<pcl::PointXYZ> CloudIn, Eigen::Vector3d origin);
 		void setInputforCollision(pcl::PointCloud<pcl::PointXYZ> CloudIn);
 		void setPt( Eigen::Vector3d startPt, Eigen::Vector3d endPt, double xl, double xh, double yl, double yh, double zl, double zh,
 					double local_range, int max_iter, double sample_portion, double goal_portion, double yaw);
 		void setStartPt( Eigen::Vector3d startPt, Eigen::Vector3d endPt);
+		super_utils::Mat3f computeCovariance(const Eigen::Vector3d& point);
 
 		/*  commit local target and move tree root  */
 		void resetRoot(Eigen::Vector3d & commitTarget);

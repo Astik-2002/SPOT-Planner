@@ -28,7 +28,8 @@ setup(
             'pcd_to_csv = ros2_gym_pybullet_drones.pcd_to_csv:main',
             'trajectory_tracker = ros2_gym_pybullet_drones.vision_trajectory_tracker:main',
             'trajectory_generator = ros2_gym_pybullet_drones.trajectory_eg:main',
-            'noisy_aviary = ros2_gym_pybullet_drones.noisy_aviary:main',
+            'noise_gen = ros2_gym_pybullet_drones.noise_gen:main',
+
         ],
     },
 )

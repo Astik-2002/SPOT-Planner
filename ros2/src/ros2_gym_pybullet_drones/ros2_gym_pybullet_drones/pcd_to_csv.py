@@ -18,7 +18,8 @@ class PointCloudToCSV(Node):
         super().__init__('point_cloud_to_csv')
         self.subscription = self.create_subscription(
             PointCloud2,
-            '/pcd_gym_pybullet',  # Replace with your actual topic
+            'noisy_pcd_gym_pybullet',
+            # '/camera/camera/depth/color/points',  # Replace with your actual topic
             self.point_cloud_callback,
             10)
         self.subscription  # Prevent unused variable warning

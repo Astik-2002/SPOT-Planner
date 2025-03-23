@@ -50,7 +50,7 @@ class AviaryWrapper(Node):
         timer_period_sec = 1/timer_freq_hz
         self.R = 0.0
         self.H = 0.8
-        self.INIT_XYZS = np.array([[-2, self.R, self.H]])
+        self.INIT_XYZS = np.array([[0.0, self.R, self.H]])
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
         self.goal_pos = np.array([[50.0, 0.0, 1.5]]).flatten()
@@ -63,7 +63,7 @@ class AviaryWrapper(Node):
                            neighbourhood_radius=np.inf,
                            freq=timer_freq_hz,
                            aggregate_phy_steps=1,
-                           gui=True,
+                           gui=False,
                            record=False,
                            obstacles=True,
                            user_debug_gui=False
@@ -219,24 +219,25 @@ class AviaryWrapper(Node):
         depth_image = obs["0"]["dep"]
         rgb_image = obs["0"]["rgb"]
         seg_image = obs["0"]["seg"]
-        pcd = self.env._pcd_generation(depth_image)
-        points = np.asarray(pcd.points)
+        # depth_image = self.add_depth_noise(depth_image)
+        # pcd = self.env._pcd_generation(depth_image)
+        # points = np.asarray(pcd.points)
         # points_noisy = self.generate_noise(points)
         # points = self.env._pcd_generation_opencv(depth_image)
         # Create header
-        header = Header()
-        header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = "base_link"
+        # header = Header()
+        # header.stamp = self.get_clock().now().to_msg()
+        # header.frame_id = "base_link"
 
-        # Define fields for PointCloud2
-        fields = [
-            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
-        ]   
+        # # Define fields for PointCloud2
+        # fields = [
+        #     PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+        #     PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+        #     PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
+        # ]   
 
-        # Create PointCloud2 message
-        pointcloud_msg = pc2.create_cloud(header, fields, points)
+        # # Create PointCloud2 message
+        # pointcloud_msg = pc2.create_cloud(header, fields, points)
 
 
         # header_noisy = Header()
@@ -256,7 +257,7 @@ class AviaryWrapper(Node):
         # # Publish the PointCloud2 message
         # self.noisy_pcd_pub.publish(noisy_pointcloud_msg)
         
-        self.pcd_pub.publish(pointcloud_msg)
+        # self.pcd_pub.publish(pointcloud_msg)
 
 
     #    seg_image = obs["0"]["seg"]
@@ -325,7 +326,41 @@ class AviaryWrapper(Node):
         s_x = 0.001063 + 0.0007278 * x + 0.003949 * x * x # + (0.022 * x**1.5 * theta) / ((PI / 2 - theta) * (PI / 2 - theta))
         return s_x
 
-    
+    def add_depth_noise(self, depth_map, fov_vertical = 90, fov_horizontal = 90):
+        """ Apply noise to the entire depth map with theta = 0. """
+        h, w = depth_map.shape
+        cx, cy = w // 2, h // 2
+        fx = w / (2 * np.tan(fov_horizontal / 2))  # Focal length in pixels
+        fy = h / (2 * np.tan(fov_vertical / 2))
+
+        noisy_depth = np.copy(depth_map)
+
+        for y in range(h):
+            for x in range(w):
+                z = depth_map[y, x]
+                if z > 0:  # Valid depth
+                    # Add axial noise
+                    noisy_depth[y, x] += self.axial_noise(z)
+
+                    # Apply lateral noise
+                    noise_xy = self.lateral_noise(z, fx)
+                    x_noisy = int(np.clip(x + noise_xy[0], 0, w - 1))
+                    y_noisy = int(np.clip(y + noise_xy[1], 0, h - 1))
+                    noisy_depth[y_noisy, x_noisy] = noisy_depth[y, x]
+
+        return noisy_depth
+
+    def axial_noise(self,z):
+        """ Axial noise model based on depth z (theta = 0). """
+        # sigma_z = 0.0012 + 0.0019 * (z - 0.4)**2
+        sigma_z = 0.001063 + 0.0007278 * z + 0.003949 * z * z
+        return np.random.normal(0, sigma_z)
+
+    def lateral_noise(self,z, fx=585):
+        """ Lateral noise model without angle dependency (theta = 0). """
+        sigma_L = 0.04
+        return np.random.normal(0, sigma_L, 2)  # Noise for (x, y)
+
     def compute_incidence(self, point):
         return math.atan2(math.sqrt(point[0]**2 + point[1]**2), point[2])
 

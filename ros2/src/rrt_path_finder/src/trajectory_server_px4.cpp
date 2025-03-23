@@ -197,7 +197,8 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr _dest_pts_sub;
 
   Eigen::Vector3d waypoints_;  // Store waypoints as Eigen::Vector3d
-    
+  Eigen::Vector3d waypoints_NED;  // Store waypoints as Eigen::Vector3d
+
   // Timers
   rclcpp::TimerBase::SharedPtr timer_offboard_;
   rclcpp::TimerBase::SharedPtr timer_setpoint_;
@@ -222,6 +223,11 @@ private:
           last_pose.pose.position.x, 
           last_pose.pose.position.y, 
           last_pose.pose.position.z);
+      
+      waypoints_NED = Eigen::Vector3d(
+        last_pose.pose.position.y, 
+        last_pose.pose.position.x, 
+        -last_pose.pose.position.z);
     }
   }
 
@@ -384,12 +390,10 @@ private:
     //   std::cout << "yaw spline is being used"<< std::endl;
     //     desired_yaw_enu = yaw_spline_->evaluate(elapsed);
     // } else {
-        desired_yaw_enu = std::atan2(des_vel.y(), des_vel.x());
+        // desired_yaw_enu = std::atan2(des_vel.y(), des_vel.x());
     // }
     // Convert ENU yaw to NED yaw by subtracting pi/2
-    double desired_yaw_ned = desired_yaw_enu;
-    std::cout<<"Desired yaw is : "<<desired_yaw_ned<<std::endl;
-    publishSetpoint(des_pos, des_vel, des_Acc, desired_yaw_ned);
+    publishSetpoint(des_pos, des_vel, des_Acc);
   }
 
   void handleAddTrajectory(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
@@ -475,7 +479,7 @@ private:
   }
 
   void publishSetpoint(const Eigen::Vector3d& pos_enu, const Eigen::Vector3d& vel_enu,
-                         const Eigen::Vector3d& acc_enu, double yaw_ned)
+                         const Eigen::Vector3d& acc_enu)
   {
     px4_msgs::msg::TrajectorySetpoint sp{};
     sp.timestamp = this->now().nanoseconds() / 1000;
@@ -492,14 +496,18 @@ private:
     sp.acceleration[0] = acc_enu.x(); // North acceleration
     sp.acceleration[1] = -acc_enu.y(); // East acceleration
     sp.acceleration[2] = -acc_enu.z(); // Down acceleration
-
-    sp.yaw = wrapAngle(yaw_ned);
+    Eigen::Vector3d des_pos_NED{sp.position[0], sp.position[1], sp.position[2]};
+    auto diff_pos = waypoints_NED-des_pos_NED;
+    double yaw_ned = std::atan2(diff_pos.y(),diff_pos.x());
+    sp.yaw = 3.14/2; // wrapAngle(yaw_ned);
     // sp.yaw = yaw_ned;
     trajectory_setpoint_pub_->publish(sp);
   }
 
   void sendHoverSetpoint()
   {
+    auto dir = waypoints_ - current_pos;
+
     px4_msgs::msg::TrajectorySetpoint sp{};
     sp.timestamp = this->now().nanoseconds() / 1000;
     sp.position[0] = current_pos_.x();
@@ -517,7 +525,7 @@ private:
     std::cout << "Current Position : " << current_pos_.x() << ' ' 
               << current_pos_.y() << ' ' << current_pos_.z() << std::endl;
 
-    sp.yaw = wrapAngle(atan2(current_pos_.x(), current_pos_.y()) - M_PI/2);
+    sp.yaw = wrapAngle(atan2(dir.y(), dir.x()) - M_PI);
     trajectory_setpoint_pub_->publish(sp);
   }
 

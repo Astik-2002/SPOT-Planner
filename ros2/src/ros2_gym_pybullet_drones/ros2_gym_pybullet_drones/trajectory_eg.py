@@ -50,7 +50,7 @@ class trajectory_pub(Node):
         trajSelect[1] = 3           
         # Select if waypoint time is used, or if average speed is used to calculate waypoint time   (0: waypoint time,   1: average speed)
         trajSelect[2] = 1
-        v_avg = 0.3 # m/s
+        v_avg = 0.7 # m/s
         self.traj = Trajectory(ctrlType, trajSelect, v_avg)
         self._psi = 0
         traj_msg = TrajMsg()

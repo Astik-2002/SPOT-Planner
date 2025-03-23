@@ -67,6 +67,30 @@ namespace super_planner {
         return noiseValues;
     }    
 
+    Mat3f CIRI_e::computeCovariance(const Eigen::Vector3d& point)
+    {
+        super_utils::Mat3f R_tf;
+        R_tf << 0, 0, 1,
+        1, 0, 0,
+        0, 1, 0;
+
+        super_utils::Mat3f R_tf_inv = R_tf.inverse();
+        Eigen::Vector3d point_cam = R_tf_inv * point;
+        double x = point_cam[0], y = point_cam[1], z = point_cam[2];
+        // double k1 = 0.04;
+        // double sz = 0.001063 + 0.0007278 * z + 0.003949 * z * z;
+        double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
+        double k1 = 0.0016;
+        double k12 = k1*k1;
+        super_utils::Mat3f Sigma;
+        Sigma << k12 + pow(x*sz/z,2), x*y*pow(sz/z,2), x/z*pow(sz,2),
+        x*y*pow(sz/z,2), k12 + pow(y*sz/z,2), y/z*pow(sz,2),
+        x/z*pow(sz,2), y/z*pow(sz,2), pow(sz,2) ;
+
+        Sigma = R_tf * Sigma * R_tf.transpose();
+        return Sigma;
+    }
+
     RET_CODE CIRI_e::convexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, const Eigen::Vector3d& a,
                                        const Eigen::Vector3d& b, const Eigen::Vector3d &o, std::vector<Ellipsoid> &tangent_obs, bool uncertanity) {
         const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
@@ -104,8 +128,9 @@ namespace super_planner {
         {
             Vec3f noise_vec = noise_pc.col(i);
             Vec3f point_vec = pc.col(i);
-            // auto temp = Ellipsoid(Mat3f::Identity(), noise_vec, point_vec);
-            auto temp = Ellipsoid(Mat3f::Identity(), noise_vec, point_vec);
+            Mat3f cov = computeCovariance(point_vec);
+            auto temp = Ellipsoid(cov, point_vec, robot_r_, 11.33);
+            E_pw_vec.push_back(temp);
             E_pw_vec.push_back(temp);
         }
         int debug_l;
@@ -149,7 +174,9 @@ namespace super_planner {
                     ///     Compute the tangent plane of sphere
                     ///
                     const auto & pt_w = pc.col(pcMinId);
-                    const auto dis = distancePointToSegment(pt_w,a,b);
+                    auto E_pw = E_pw_vec[pcMinId];
+                    // const auto dis = distancePointToSegment(pt_w,a,b);
+                    const auto Notvalid = EllipsoidExtentViolation(E_pw, a, b);
                     double uncertain_radius = 0;
                     // if(uncertanity)
                     // {
@@ -157,14 +184,11 @@ namespace super_planner {
                     //     uncertain_radius = noise_pt_w.maxCoeff()*sqrt(11.3345);
                     //     robot_r_ = robot_r_ + uncertain_radius;
                     // }
-                    if(dis < robot_r_ - 1e-2) {
+                    if(Notvalid) {
                         // infeasible_problem = true;
                         infeasible_pt_w = pt_w;
-                        cout<<YELLOW<<" -- [CIRI_e] WARNING! The problem is not feasible, the min dis to obstacle is only: "<<dis<<RESET<<endl;
+                        cout<<YELLOW<<" -- [CIRI_e] WARNING! The problem is not feasible"<<RESET<<endl;
                         return FAILED;
-                        cout<<" -- [CIRI_e] dis: "<<dis<<endl;
-                        cout<<" -- [CIRI_e] robot_r: "<<robot_r_<<endl;
-                        cout<<" -- [CIRI_e] uncertanity added: "<<uncertain_radius<<endl;
                         cout<<" -- [CIRI_e] pcMin: "<<pt_w.transpose()<<endl;
                         cout<<" -- [CIRI_e] a: "<<a.transpose()<<endl;
                         cout<<" -- [CIRI_e] b: "<<b.transpose()<<endl;
@@ -206,12 +230,11 @@ namespace super_planner {
                         if(uncertanity)
                         {
                             std::cout<<"Entered ellipsoid configuration"<<std::endl;
-                            sphere_template_ = Ellipsoid(Mat3f::Identity(), noise_pt_w, Vec3f(0, 0, 0));
-                            Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
+                            E_pw = E_pw_vec[pcMinId];
+                            Ellipsoid E_pe(C_inv * E_pw.C(), pt_e);
                             Vec3f close_pt_e;
                             E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
                             Vec3f c_pt_w = E.toWorldFrame(close_pt_e);
-                            E_pw = E_pw_vec[pcMinId];
                             temp_plane_w = E_pw.computeTangentPlane(c_pt_w);   
                         }
                         else
@@ -400,13 +423,26 @@ namespace super_planner {
         }
         Eigen::Vector3d P = pass_point - center;
         Eigen::Vector3d norm_ = (pass_point - center).cross(seed - center).normalized();
+        if (norm_.squaredNorm() < 1e-6) {
+            std::cerr << "Error: Degenerate normal vector!" << std::endl;
+            return;
+        }
+        
         Eigen::Matrix3d R = Eigen::Quaterniond::FromTwoVectors(norm_, Vec3f(0, 0, 1)).matrix();
         P = R * P;
         Eigen::Vector3d C = R * (seed - center);
         Eigen::Vector3d Q;
         double r2 = r * r;
         double p1p2n = P.head(2).squaredNorm();
+        if (p1p2n < r2) {
+            std::cerr << "Error: Invalid sqrt input!" << std::endl;
+            return;
+        }        
         double d = sqrt(p1p2n - r2);
+        if (p1p2n < 1e-6) {
+            std::cerr << "Error: Division by zero!" << std::endl;
+            return;
+        }        
         double rp1p2n = r / p1p2n;
         double q11 = rp1p2n * (P(0) * r - P(1) * d);
         double q21 = rp1p2n * (P(1) * r + P(0) * d);

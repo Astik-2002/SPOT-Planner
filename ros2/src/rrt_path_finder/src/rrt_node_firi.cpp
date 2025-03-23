@@ -22,6 +22,8 @@
 #include "rrt_path_finder/corridor_finder.h"
 // #include <px4_msgs/msg/vehicle_odometry.hpp>
 // #include "px4_msgs/msg/vehicle_local_position.hpp"
+#include "../utils/header/type_utils.hpp"
+#include "../utils/header/eigen_alias.hpp"
 
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
@@ -32,11 +34,14 @@
 
 #include "rrt_path_finder/firi.hpp"
 #include "rrt_path_finder/ciri.h"
+#include "rrt_path_finder/ciri_ellip.h"
+#include "rrt_path_finder/ciri_sphere.h"
 #include "rrt_path_finder/gcopter.hpp"
 #include "rrt_path_finder/trajectory.hpp"
 #include "rrt_path_finder/geo_utils.hpp"
 #include "rrt_path_finder/quickhull.hpp"
 #include "rrt_path_finder/voxel_map.hpp"
+#include "rrt_path_finder/corridor_finder_ellip.h"
 
 using namespace std;
 using namespace Eigen;
@@ -54,9 +59,9 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 1.2);
-        this->declare_parameter("uav_radius", 1.0);
-        this->declare_parameter("search_margin", 0.7);
+        this->declare_parameter("safety_margin", 0.5);
+        this->declare_parameter("uav_radius", 0.4);
+        this->declare_parameter("search_margin", 0.0);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -69,15 +74,15 @@ public:
 
         this->declare_parameter("x_l", -70.0);
         this->declare_parameter("x_h", 70.0);
-        this->declare_parameter("y_l", -70.0);
-        this->declare_parameter("y_h", 70.0);
+        this->declare_parameter("y_l", -7.0);
+        this->declare_parameter("y_h", 7.0);
         // this->declare_parameter("z_l", 1.0);
-        this->declare_parameter("z_l2", -3.0);
+        this->declare_parameter("z_l2", 0.5);
         this->declare_parameter("z_l", 1.2);
 
         // this->declare_parameter("z_h", 1.0);
-        this->declare_parameter("z_h2", 3.5);
-        this->declare_parameter("z_h", 2.5);
+        this->declare_parameter("z_h2", 2.0);
+        this->declare_parameter("z_h", 2.0);
 
         this->declare_parameter("target_x", 0.0);   
         this->declare_parameter("target_y", 0.0);
@@ -124,6 +129,8 @@ public:
         _vis_mesh_pub = this->create_publisher<visualization_msgs::msg::Marker>("_vis_mesh", 10);
         _vis_edge_pub = this->create_publisher<visualization_msgs::msg::Marker>("_vis_edge", 10);
         _vis_commit_target = this->create_publisher<visualization_msgs::msg::Marker>("_vis_commit_target", 10);
+        // _vis_ellipsoid = this->create_publisher<visualization_msgs::msg::Marker>("_vis_ellipsoid_marker", 10);
+        _vis_ellipsoid = this->create_publisher<visualization_msgs::msg::MarkerArray>("_vis_ellipsoid_marker", 10);
 
         _vis_trajectory_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("_vis_trajectory", 10);
 
@@ -139,7 +146,7 @@ public:
         _dest_pts_sub = this->create_subscription<nav_msgs::msg::Path>(
             "waypoints", 1, std::bind(&PointCloudPlanner::rcvWaypointsCallBack, this, std::placeholders::_1));
         _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
+            "noisy_pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
         _odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom", 10, std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1));
 
@@ -164,7 +171,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr _vis_rrt_path_pub;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr _vis_corridor_pub;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _vis_commit_target;
-
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr _vis_ellipsoid;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _vis_map_pub;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _vis_mesh_pub;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _vis_edge_pub;
@@ -216,13 +223,18 @@ private:
     float threshold = 0.8;
     int trajectory_id = 0;
     int order = 5;
-    double convexCoverRange = 1.2;
+    double convexCoverRange = 1.0;
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
     safeRegionRrtStar _rrtPathPlanner;
+    // safeRegionRrtStarEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     Trajectory<5> _traj;
+    super_planner::CIRI_e ciri_e;
+    super_planner::CIRI_s ciri_s;
+    super_planner::CIRI ciri;
+    Eigen::Vector3d pcd_origin;
     voxel_map::VoxelMap V_map;
     int max_iter=100000;
     float voxelWidth = 0.35;
@@ -231,8 +243,8 @@ private:
     // Variables for target position, trajectory, odometry, etc.
     Eigen::Vector3d _start_pos, _end_pos, _start_vel{0.0, 0.0, 0.0}, _last_vel{0.0, 0.0, 0.0}, _start_acc;
     Eigen::Vector3d _commit_target{0.0, 0.0, 0.0}, _corridor_end_pos;
-
-
+    std::vector<geometry_utils::Ellipsoid> tangent_obs;
+    super_utils::Mat3f rotation_matrix = super_utils::Mat3f::Identity();
     // uav physical params
     float mass = 0.027000;
     float horizontal_drag_coeff = 0.000001;
@@ -335,7 +347,7 @@ private:
         // RCLCPP_WARN(this->get_logger(), "Received odometry: position(x: %.2f, y: %.2f, z: %.2f)",
                // _odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose);
     }
-
+/*
     // void rcvOdomCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
     // {
 
@@ -408,7 +420,7 @@ private:
     //               << (_start_pos - _end_pos).norm() << std::endl;
     //     std::cout << "[odom callback] UAV speed: " << _start_vel.norm() << std::endl;
     // }
-
+*/
     void rcvPointCloudCallBack(const sensor_msgs::msg::PointCloud2::SharedPtr pointcloud_msg)
     {
         if (pointcloud_msg->data.empty())
@@ -420,6 +432,16 @@ private:
         try
         {
             tf_buffer_.transform(*pointcloud_msg, cloud_transformed, "ground_link", tf2::durationFromSec(0.1));
+            // geometry_msgs::msg::TransformStamped transform_stamped;
+            // transform_stamped = tf_buffer_.lookupTransform("ground_link", pointcloud_msg->header.frame_id, tf2::TimePointZero);
+            // const auto& q = transform_stamped.transform.rotation;
+
+            // // Convert quaternion to Eigen
+            // Eigen::Quaterniond eigen_quat(q.w, q.x, q.y, q.z);
+    
+            // // Convert quaternion to rotation matrix
+            // rotation_matrix = eigen_quat.toRotationMatrix();
+    
         }
         catch (tf2::TransformException &ex)
         {
@@ -640,8 +662,6 @@ private:
     void convexCoverCIRI(const std::vector<Eigen::Vector3d> &path, 
         const double &range,
         std::vector<Eigen::MatrixX4d> &hpolys,
-        const Eigen::Vector3d &o,
-        bool uncertanity,
         const double eps)
     {
         Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
@@ -665,19 +685,9 @@ private:
         std::vector<Eigen::Vector3d> valid_pc;
         std::vector<Eigen::Vector3d> bs;
         valid_pc.reserve(pcd_points.size());
-        super_planner::CIRI ciri;
         ciri.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
-
         for (int i = 0; i < n;)
         {
-            if(uncertanity)
-            {
-                std::cout<<"[ciri debug] stochastic polygons "<<std::endl;
-            }
-            else
-            {
-                std::cout<<"[ciri debug] deterministic polygons "<<std::endl;
-            }
 
             Eigen::Vector3d path_point = path[i];
             a = b;
@@ -714,6 +724,7 @@ private:
                 std::cerr << "CIRI decomposition failed." << std::endl;
                 continue;
             }
+            pcd_origin = _start_pos;
 
             geometry_utils::Polytope optimized_poly;
             ciri.getPolytope(optimized_poly);
@@ -731,6 +742,200 @@ private:
                         continue;
                     }
                     ciri.getPolytope(optimized_poly);
+                    gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+                    hpolys.emplace_back(gap);
+                }
+            }
+            hpolys.emplace_back(hp);
+        }
+    }
+
+    void convexCoverCIRI_E(const std::vector<Eigen::Vector3d> &path, 
+        const double &range,
+        std::vector<Eigen::MatrixX4d> &hpolys,
+        const Eigen::Vector3d &o,
+        bool uncertanity,
+        const double eps)
+    {
+        std::cout<<"[ciri ellipsoid debug]"<<std::endl;
+        Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
+        Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
+
+        hpolys.clear();
+        int n = int(path.size());
+        
+        Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+        bd(0, 0) = 1.0;
+        bd(1, 0) = -1.0;
+        bd(2, 1) = 1.0;
+        bd(3, 1) = -1.0;
+        bd(4, 2) = 1.0;
+        bd(5, 2) = -1.0;
+
+        Eigen::MatrixX4d hp, gap;
+        Eigen::MatrixX3d tangent_pcd1, tangent_pcd2;
+        Eigen::Vector3d a(path[0][0], path[0][1], path[0][2]);
+        Eigen::Vector3d b = a;
+        std::vector<Eigen::Vector3d> valid_pc;
+        std::vector<Eigen::Vector3d> bs;
+        valid_pc.reserve(pcd_points.size());
+        ciri_e.setupParams(_uav_radius, 1); // Setup CIRI with robot radius and iteration number
+        for (int i = 0; i < n;)
+        {
+            if(uncertanity)
+            {
+                std::cout<<"[ciri_E debug] stochastic polygons "<<std::endl;
+            }
+            else
+            {
+                std::cout<<"[ciri_E debug] deterministic polygons "<<std::endl;
+            }
+
+            Eigen::Vector3d path_point = path[i];
+            a = b;
+            b = path_point;
+            i++;
+            bs.emplace_back(b);
+
+            bd(0, 3) = -std::min(std::max(a(0), b(0)) + range, highCorner(0));
+            bd(1, 3) = +std::max(std::min(a(0), b(0)) - range, lowCorner(0));
+            bd(2, 3) = -std::min(std::max(a(1), b(1)) + range, highCorner(1));
+            bd(3, 3) = +std::max(std::min(a(1), b(1)) - range, lowCorner(1));
+            bd(4, 3) = -std::min(std::max(a(2), b(2)) + range, highCorner(2));
+            bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
+
+            valid_pc.clear();
+            for (const Eigen::Vector3d &p : pcd_points)
+            {
+                if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
+                {
+                    valid_pc.emplace_back(p);
+                }
+            }
+            if (valid_pc.empty()) {
+                std::cerr << "No valid points found for the current segment." << std::endl;
+                Eigen::MatrixX4d temp_bp = bd;
+                // firi::shrinkPolygon(temp_bp, _uav_radius);
+                hpolys.emplace_back(temp_bp);
+                continue;
+            }
+
+            Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
+
+            if (ciri_e.convexDecomposition(bd, pc, a, b, o, tangent_obs, uncertanity) != super_utils::SUCCESS) {
+                std::cerr << "CIRI_E decomposition failed." << std::endl;
+                continue;
+            }
+            pcd_origin = _start_pos;
+
+            geometry_utils::Polytope optimized_poly;
+            ciri_e.getPolytope(optimized_poly);
+            hp = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+
+            if (hpolys.size() != 0)
+            {
+                const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
+                if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
+                            ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                {
+                    if (ciri_e.convexDecomposition(bd, pc, a, a, o, tangent_obs, uncertanity) != super_utils::SUCCESS) 
+                    {
+                        std::cerr << "CIRI_E decomposition failed." << std::endl;
+                        continue;
+                    }
+                    ciri_e.getPolytope(optimized_poly);
+                    gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+                    hpolys.emplace_back(gap);
+                }
+            }
+            hpolys.emplace_back(hp);
+        }
+    }
+
+    void convexCoverCIRI_S(const std::vector<Eigen::Vector3d> &path, 
+        const double &range,
+        std::vector<Eigen::MatrixX4d> &hpolys,
+        const Eigen::Vector3d &o,
+        const double eps)
+    {
+        Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
+        Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
+
+        hpolys.clear();
+        int n = int(path.size());
+        
+        Eigen::Matrix<double, 6, 4> bd = Eigen::Matrix<double, 6, 4>::Zero();
+        bd(0, 0) = 1.0;
+        bd(1, 0) = -1.0;
+        bd(2, 1) = 1.0;
+        bd(3, 1) = -1.0;
+        bd(4, 2) = 1.0;
+        bd(5, 2) = -1.0;
+
+        Eigen::MatrixX4d hp, gap;
+        Eigen::MatrixX3d tangent_pcd1, tangent_pcd2;
+        Eigen::Vector3d a(path[0][0], path[0][1], path[0][2]);
+        Eigen::Vector3d b = a;
+        std::vector<Eigen::Vector3d> valid_pc;
+        std::vector<Eigen::Vector3d> bs;
+        valid_pc.reserve(pcd_points.size());
+        ciri_s.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
+
+        for (int i = 0; i < n;)
+        {
+            Eigen::Vector3d path_point = path[i];
+            a = b;
+            b = path_point;
+            i++;
+            bs.emplace_back(b);
+
+            bd(0, 3) = -std::min(std::max(a(0), b(0)) + range, highCorner(0));
+            bd(1, 3) = +std::max(std::min(a(0), b(0)) - range, lowCorner(0));
+            bd(2, 3) = -std::min(std::max(a(1), b(1)) + range, highCorner(1));
+            bd(3, 3) = +std::max(std::min(a(1), b(1)) - range, lowCorner(1));
+            bd(4, 3) = -std::min(std::max(a(2), b(2)) + range, highCorner(2));
+            bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
+
+            valid_pc.clear();
+            for (const Eigen::Vector3d &p : pcd_points)
+            {
+                if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
+                {
+                    valid_pc.emplace_back(p);
+                }
+            }
+            if (valid_pc.empty()) {
+                std::cerr << "No valid points found for the current segment." << std::endl;
+                Eigen::MatrixX4d temp_bp = bd;
+                // firi::shrinkPolygon(temp_bp, _uav_radius);
+                hpolys.emplace_back(temp_bp);
+                continue;
+            }
+
+            Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
+
+            if (ciri_s.convexDecomposition(bd, pc, a, b, o, tangent_obs) != super_utils::SUCCESS) {
+                std::cerr << "CIRI_S decomposition failed." << std::endl;
+                continue;
+            }
+            pcd_origin = _start_pos;
+
+            geometry_utils::Polytope optimized_poly;
+            ciri_s.getPolytope(optimized_poly);
+            hp = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
+
+            if (hpolys.size() != 0)
+            {
+                const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
+                if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
+                            ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
+                {
+                    if (ciri_s.convexDecomposition(bd, pc, a, a, o, tangent_obs) != super_utils::SUCCESS) 
+                    {
+                        std::cerr << "CIRI_S decomposition failed." << std::endl;
+                        continue;
+                    }
+                    ciri_s.getPolytope(optimized_poly);
                     gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
                     hpolys.emplace_back(gap);
                 }
@@ -903,9 +1108,11 @@ private:
             _path_vector = matrixToVector(_path);
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
-            // convexCover(corridor_points, convexCoverRange, 1.0e-6);
             convexCover(corridor_points, convexCoverRange, 1.0e-6);
+            // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+            // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             polygon_dilation(hpolys);
+            // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -918,6 +1125,7 @@ private:
             {
                 _rrtPathPlanner.resetRoot(_commit_target);
                 visualizePolytope(hpolys);
+                visualizeObs(tangent_obs, 2);
                 visualizeTrajectory(_traj);
             }      
 
@@ -970,10 +1178,11 @@ private:
                 getCorridorPoints();
                 auto t1 = std::chrono::steady_clock::now();
 
-                // convexCover(corridor_points, convexCoverRange, 1.0e-6);
                 convexCover(corridor_points, convexCoverRange, 1.0e-6);
-
+                // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+                // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 polygon_dilation(hpolys);
+                // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 
                 shortCut();
                 auto t2 = std::chrono::steady_clock::now();
@@ -1030,6 +1239,7 @@ private:
             // std::cout<<"[incremental planner] time duration: "<<elapsed_ms<<std::endl;
             visualizePolytope(hpolys);
             visualizeTrajectory(_traj);
+            visualizeObs(tangent_obs, 2);
         }
         //RCLCPP_DEBUG(this->get_logger(),"Traj updated");
         visRrt(_rrtPathPlanner.getTree());
@@ -1372,6 +1582,51 @@ private:
             marker.color.b = 0.0;
 
             _vis_commit_target->publish(marker);
+    }
+
+    void visualizeObs(const std::vector<geometry_utils::Ellipsoid> &tangent_obs, int id)
+    {
+
+        visualization_msgs::msg::MarkerArray marker_array;
+        
+        for (size_t i = 0; i < tangent_obs.size(); ++i)
+        {
+            const auto &obs = tangent_obs[i];
+            auto center = obs.d() - pcd_origin;
+            auto axes = obs.r();
+            
+            visualization_msgs::msg::Marker marker;
+            marker.header.frame_id = "map";
+            marker.header.stamp = this->get_clock()->now();
+            marker.ns = "ellipsoids";
+            marker.id = id * 100 + i;
+            marker.type = visualization_msgs::msg::Marker::SPHERE;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+            
+            marker.pose.position.x = center[0];
+            marker.pose.position.y = center[1];
+            marker.pose.position.z = center[2];
+            marker.pose.orientation.w = 1.0; // Identity rotation
+            
+            marker.scale.x = 2.0 * axes[0]; // Major axis
+            marker.scale.y = 2.0 * axes[1]; // Minor axis
+            marker.scale.z = 2.0 * axes[2]; // Minor axis
+            
+            double r = 1.0;
+            double g = 0.0;
+            double b = 0.0;
+            
+            marker.color.r = r;
+            marker.color.g = g;
+            marker.color.b = b;
+            marker.color.a = 1.0; // Transparent ellipsoids
+            
+            marker.lifetime = rclcpp::Duration::from_seconds(0);
+            marker_array.markers.push_back(marker);
+        }
+        
+        _vis_ellipsoid->publish(marker_array);
+        std::cout<<"[obstacle vis debug] obstacle visualized"<<std::endl;
     }
 
     std::vector<Eigen::Vector3d> matrixToVector(const Eigen::MatrixXd& path_matrix)

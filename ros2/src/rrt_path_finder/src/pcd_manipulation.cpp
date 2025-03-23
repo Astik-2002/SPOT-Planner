@@ -63,8 +63,8 @@ public:
             double y = pt.y;
             double z = pt.z;
             
-            double sigma_x = 0.001063 + 0.0007278 * x + 0.003949 * x * x;
-            double sigma_y = 0.04;
+            double sigma_x = 0.0012 + 0.0019 * (z - 0.4) * (z - 0.4);// 0.001063 + 0.0007278 * x + 0.003949 * x * x;
+            double sigma_y = 0.8*x/32;
             double sigma_z = sigma_y;
             std::normal_distribution<double> distribution_x(x, sigma_x);
             std::normal_distribution<double> distribution_y(y, sigma_y);
@@ -78,50 +78,10 @@ public:
             noisy_p.y = noise_y;
             noisy_p.z = noise_z;
             noisy_pcd.points.push_back(noisy_p);
-
-            double dr1 = std::max(sigma_x, sigma_z)*sqrt(11.35) + 0.6;
-            std::vector<double> dr_vec{dr1, dr1/2};
-            for(double dr: dr_vec)
-            {
-                pcl::PointXYZ p1(x + dr, y - dr, z), p2(x + dr, y, z), p3(x + dr, y + dr, z), p4(x, y - dr, z);
-                pcl::PointXYZ p5(x, y + dr, z), p6(x - dr, y - dr, z), p7(x - dr, y, z), p8(x - dr, y + dr, z), p9(x + dr, y - dr, z - dr);
-                pcl::PointXYZ p10(x + dr, y, z - dr), p11(x + dr, y + dr, z - dr), p12(x, y - dr, z - dr), p13(x, y + dr, z - dr), p14(x - dr, y - dr, z - dr);
-                pcl::PointXYZ p15(x - dr, y, z - dr), p16(x - dr, y + dr, z - dr), p17(x + dr, y - dr, z + dr), p18(x + dr, y, z + dr), p19(x + dr, y + dr, z + dr);
-                pcl::PointXYZ p20(x, y - dr, z + dr), p21(x, y + dr, z + dr), p22(x - dr, y - dr, z + dr), p23(x - dr, y, z + dr), p24(x - dr, y + dr, z + dr);
-                
-                inflated_pcd.points.push_back(p1);
-                inflated_pcd.points.push_back(p2);
-                inflated_pcd.points.push_back(p3);
-                inflated_pcd.points.push_back(p4);
-                inflated_pcd.points.push_back(p5);
-                inflated_pcd.points.push_back(p6);
-                inflated_pcd.points.push_back(p7);
-                inflated_pcd.points.push_back(p8);
-                inflated_pcd.points.push_back(p9);
-                inflated_pcd.points.push_back(p10);
-                inflated_pcd.points.push_back(p11);
-                inflated_pcd.points.push_back(p12);
-                inflated_pcd.points.push_back(p13);
-                inflated_pcd.points.push_back(p14);
-                inflated_pcd.points.push_back(p15);
-                inflated_pcd.points.push_back(p16);
-                inflated_pcd.points.push_back(p17);
-                inflated_pcd.points.push_back(p18);
-                inflated_pcd.points.push_back(p19);
-                inflated_pcd.points.push_back(p20);
-                inflated_pcd.points.push_back(p21);
-                inflated_pcd.points.push_back(p22);
-                inflated_pcd.points.push_back(p23);
-                inflated_pcd.points.push_back(p24);
-            }
         }
-        sensor_msgs::msg::PointCloud2 inflated_cloud_msg;
         sensor_msgs::msg::PointCloud2 noisy_cloud_msg;
 
         pcl::toROSMsg(noisy_pcd, noisy_cloud_msg);
-        pcl::toROSMsg(inflated_pcd, inflated_cloud_msg);
-        inflated_cloud_msg.header.frame_id = "base_link"; // Set appropriate frame ID
-        inflated_cloud_msg.header.stamp = this->get_clock()->now();
 
         noisy_cloud_msg.header.frame_id = "base_link"; // Set appropriate frame ID
         noisy_cloud_msg.header.stamp = this->get_clock()->now();

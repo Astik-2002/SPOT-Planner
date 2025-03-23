@@ -4,25 +4,38 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import TransformStamped, PoseStamped, Point
 from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry
+from px4_msgs.msg import VehicleOdometry
 from visualization_msgs.msg import Marker
 import tf2_ros
 import tf_transformations  # Use this for quaternion calculations
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 class DummyTFAndPathPublisher(Node):
     def __init__(self):
         super().__init__('dummy_tf_and_path_publisher')
-
+        self.odom = VehicleOdometry()
         # TF broadcaster for the dummy transform
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         # Publisher for the path (waypoints)
         self.path_pub = self.create_publisher(Path, 'waypoints', 10)
-
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,  # Match the publisher's reliability policy
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,  # Match the publisher's durability policy
+            depth=10  # Adjust the depth as needed
+        )
+        self.odom_sub = self.create_subscription(VehicleOdometry, '/fmu/out/vehicle_odometry', self.get_odom_callback, qos_profile)
         # Publisher for the marker visualization
         self.marker_pub = self.create_publisher(Marker, 'visualization_marker', 10)
 
         # Timer to periodically publish both messages
         self.timer = self.create_timer(0.1, self.timer_callback)
+
+    def get_odom_callback(self, msg):
+        print("odometry callback")
+        self.odom = msg
+        self.broadcast_transform(self.odom.position[0], self.odom.position[1], self.odom.position[2], self.odom.q[0], self.odom.q[1], self.odom.q[2], self.odom.q[3], "base_link", "ground_link")
 
     def timer_callback(self):
         self.publish_tf()
@@ -51,6 +64,30 @@ class DummyTFAndPathPublisher(Node):
         self.tf_broadcaster.sendTransform(t)
         self.get_logger().debug('Broadcasting corrected transform from "map" to "ground_link"')
 
+    def broadcast_transform(self, x,y,z,qx,qy,qz,qw, frame_name, parent_name):
+        # Assuming you have the drone's position and orientation as (x, y, z) and (qx, qy, qz, qw)
+        drone_position = [float(x), -float(y), -float(z)]  # Replace with actual drone position
+        drone_orientation = [float(qx), -float(qy), -float(qz), float(qw)]  # Replace with actual drone orientation
+
+        # Create the transform message
+        t = TransformStamped()
+
+        # Set the timestamp and frame IDs
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = parent_name  # Global reference frame
+        t.child_frame_id = frame_name  # Frame representing the drone body
+
+        # Set the translation and rotation
+        t.transform.translation.x = drone_position[0]
+        t.transform.translation.y = drone_position[1]
+        t.transform.translation.z = drone_position[2]
+        t.transform.rotation.x = drone_orientation[0]
+        t.transform.rotation.y = drone_orientation[1]
+        t.transform.rotation.z = drone_orientation[2]
+        t.transform.rotation.w = drone_orientation[3]
+
+        # Broadcast the transform
+        self.tf_broadcaster.sendTransform(t)
 
     def publish_path(self):
         now = self.get_clock().now().to_msg()
@@ -62,8 +99,8 @@ class DummyTFAndPathPublisher(Node):
         pose = PoseStamped()
         pose.header.stamp = now
         pose.header.frame_id = 'ground_link'  # Change to ground_link
-        pose.pose.position.x = -20.0
-        pose.pose.position.y = -20.0
+        pose.pose.position.x = 0.0
+        pose.pose.position.y = -50.0
         pose.pose.position.z = 3.0
         pose.pose.orientation.x = 0.0
         pose.pose.orientation.y = 0.0

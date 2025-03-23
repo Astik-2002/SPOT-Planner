@@ -340,7 +340,12 @@ void safeRegionRrtStar::resetRoot(Vector3d & target_coord)
             root_index = i;
         }
     }
-    if(root_index < PathList.size() && temp_root != NULL)
+    if (root_node == temp_root) 
+    {
+        std::cout << "[Debug] New root is the same as the previous root. No change needed." << std::endl;
+        return; // Avoid unnecessary reassignments
+    }
+    if(temp_root != NULL && root_index < PathList.size())
     {
         std::cout<<"[segmentation error debug] commit target: "<<target_coord.transpose()<<std::endl;
         PathList[root_index]->best = true;
@@ -349,10 +354,6 @@ void safeRegionRrtStar::resetRoot(Vector3d & target_coord)
         root_node = PathList[root_index];
         std::cout<<"[segmentation error debug] new root node: "<<root_node->coord.transpose()<<std::endl;
 
-    }
-    else
-    {
-        std::cout<<"########### we are fucked ############"<<std::endl;
     }
 
     for(int i=root_index+1; i<PathList.size(); i++)

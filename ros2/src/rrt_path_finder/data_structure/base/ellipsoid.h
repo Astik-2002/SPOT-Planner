@@ -54,6 +54,8 @@ namespace geometry_utils {
 
         Ellipsoid(const Mat3f& R, const Vec3f& r, const Vec3f& d);
 
+        Ellipsoid(const Mat3f &C, const Vec3f &d, float r, float k);
+
         /// If this ellipsoid is empty
         bool empty() const;
 

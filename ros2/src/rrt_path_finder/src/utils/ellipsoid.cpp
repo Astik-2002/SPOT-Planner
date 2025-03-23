@@ -56,6 +56,31 @@ Ellipsoid::Ellipsoid(const Mat3f &R, const Vec3f &r, const Vec3f &d)
     C_inv_ = C_.inverse();
 }
 
+Ellipsoid::Ellipsoid(const Mat3f &C, const Vec3f &d, float r, float k) : C_(C), d_(d) {
+    undefined = false;
+
+    Eigen::JacobiSVD<Eigen::Matrix3d, Eigen::FullPivHouseholderQRPreconditioner> svd(C_, Eigen::ComputeFullU);
+    Eigen::Matrix3d U = svd.matrixU();
+    Eigen::Vector3d S = svd.singularValues();
+    if (U.determinant() < 0.0) {
+        R_.col(0) = U.col(1);
+        R_.col(1) = U.col(0);
+        R_.col(2) = U.col(2);
+        r_(0) = (S(1))*sqrt(k) + r;
+        r_(1) = (S(0))*sqrt(k) + r;
+        r_(2) = (S(2))*sqrt(k) + r;
+        C_ = R_ * r_.asDiagonal() * R_.transpose();
+        C_inv_ = C_.inverse();
+    } else {
+        R_ = U;
+        r_(0) = (S(0))*sqrt(k) + r;
+        r_(1) = (S(1))*sqrt(k) + r;
+        r_(2) = (S(2))*sqrt(k) + r;
+        C_ = R_ * r_.asDiagonal() * R_.transpose();
+        C_inv_ = C_.inverse();
+    }
+}
+
 double Ellipsoid::pointDistaceToEllipsoid(const Vec3f &pt, Vec3f &closest_pt_on_ellip) const {
     /// step one: transform the point to the ellipsoid frame
     Vec3f pt_ellip_frame = R_.transpose() * (pt - d_);
@@ -204,7 +229,6 @@ bool Ellipsoid::inside(const Vec3f &pt) const {
 
 Eigen::Vector4d Ellipsoid::computeTangentPlane(const Eigen::Vector3d &pt) const {
 
-    // Compute the normal vector (gradient of the implicit equation)
     Eigen::Vector3d normal = -2.0 * C_inv_*C_inv_.transpose() * (pt - d_);
 
     // Normalize the normal vector

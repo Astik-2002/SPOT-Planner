@@ -59,9 +59,9 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 1.2);
-        this->declare_parameter("uav_radius", 1.0);
-        this->declare_parameter("search_margin", 0.7);
+        this->declare_parameter("safety_margin", 0.01);
+        this->declare_parameter("uav_radius", 0.4);
+        this->declare_parameter("search_margin", 0.0);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -74,15 +74,15 @@ public:
 
         this->declare_parameter("x_l", -70.0);
         this->declare_parameter("x_h", 70.0);
-        this->declare_parameter("y_l", -70.0);
-        this->declare_parameter("y_h", 70.0);
+        this->declare_parameter("y_l", -7.0);
+        this->declare_parameter("y_h", 7.0);
         // this->declare_parameter("z_l", 1.0);
         this->declare_parameter("z_l2", 0.5);
-        this->declare_parameter("z_l", 1.2);
+        this->declare_parameter("z_l", 0.8);
 
         // this->declare_parameter("z_h", 1.0);
-        this->declare_parameter("z_h2", 3.5);
-        this->declare_parameter("z_h", 2.5);
+        this->declare_parameter("z_h2", 5.5);
+        this->declare_parameter("z_h", 5.5);
 
         this->declare_parameter("target_x", 0.0);   
         this->declare_parameter("target_y", 0.0);
@@ -223,12 +223,12 @@ private:
     float threshold = 0.8;
     int trajectory_id = 0;
     int order = 5;
-    double convexCoverRange = 1.2;
+    double convexCoverRange = 1.0;
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
-    safeRegionRrtStar _rrtPathPlanner;
-    // safeRegionRrtStarEllip _rrtPathPlanner;
+    // safeRegionRrtStar _rrtPathPlanner;
+    safeRegionRrtStarEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     Trajectory<5> _traj;
     super_planner::CIRI_e ciri_e;
@@ -285,7 +285,7 @@ private:
     // Initializing rrt parameters
     void setRRTPlannerParams()
     {
-        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
+        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation, _uav_radius);
         _rrtPathPlanner.reset();
     }
 
@@ -338,16 +338,16 @@ private:
             _is_complete = true;   
         }
         checkSafeTrajectory();
-        std::cout<<"[odom callback] distance to commit target: "<<_rrtPathPlanner.getDis(_start_pos, _commit_target)<<std::endl;
-        // std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
-        // std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
+        // std::cout<<"[odom callback] distance to commit target: "<<_rrtPathPlanner.getDis(_start_pos, _commit_target)<<std::endl;
+        std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
+        std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
 
         // std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
 
         // RCLCPP_WARN(this->get_logger(), "Received odometry: position(x: %.2f, y: %.2f, z: %.2f)",
                // _odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose);
     }
-
+/*
     // void rcvOdomCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
     // {
 
@@ -420,7 +420,7 @@ private:
     //               << (_start_pos - _end_pos).norm() << std::endl;
     //     std::cout << "[odom callback] UAV speed: " << _start_vel.norm() << std::endl;
     // }
-
+*/
     void rcvPointCloudCallBack(const sensor_msgs::msg::PointCloud2::SharedPtr pointcloud_msg)
     {
         if (pointcloud_msg->data.empty())
@@ -757,6 +757,7 @@ private:
         bool uncertanity,
         const double eps)
     {
+        std::cout<<"[ciri ellipsoid debug]"<<std::endl;
         Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
         Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
 
@@ -820,12 +821,13 @@ private:
             }
 
             Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
+            pcd_origin = _start_pos;
 
-            if (ciri_e.convexDecomposition(bd, pc, a, b, o, tangent_obs, uncertanity) != super_utils::SUCCESS) {
+            if (ciri_e.convexDecomposition(bd, pc, a, b, pcd_origin, tangent_obs, uncertanity) != super_utils::SUCCESS) {
                 std::cerr << "CIRI_E decomposition failed." << std::endl;
+                _is_traj_exist = false;
                 continue;
             }
-            pcd_origin = _start_pos;
 
             geometry_utils::Polytope optimized_poly;
             ciri_e.getPolytope(optimized_poly);
@@ -837,7 +839,7 @@ private:
                 if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
                             ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
                 {
-                    if (ciri_e.convexDecomposition(bd, pc, a, a, o, tangent_obs, uncertanity) != super_utils::SUCCESS) 
+                    if (ciri_e.convexDecomposition(bd, pc, a, a, pcd_origin, tangent_obs, uncertanity) != super_utils::SUCCESS) 
                     {
                         std::cerr << "CIRI_E decomposition failed." << std::endl;
                         continue;
@@ -1111,7 +1113,7 @@ private:
             convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
             // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
-            convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+            // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -1625,7 +1627,7 @@ private:
         }
         
         _vis_ellipsoid->publish(marker_array);
-        std::cout<<"[obstacle vis debug] obstacle visualized"<<std::endl;
+        // std::cout<<"[obstacle vis debug] obstacle visualized"<<std::endl;
     }
 
     std::vector<Eigen::Vector3d> matrixToVector(const Eigen::MatrixXd& path_matrix)

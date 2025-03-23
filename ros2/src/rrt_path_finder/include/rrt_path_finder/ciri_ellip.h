@@ -126,6 +126,15 @@ namespace super_planner {
             }
         }
 
+        static bool EllipsoidExtentViolation(const Ellipsoid E_pw, const Eigen::Vector3d &A, const Eigen::Vector3d &B)
+        {
+            if(E_pw.inside(A) || E_pw.inside(B))
+            {
+                return true;
+            }
+            return false;
+        }
+
     public:
         CIRI_e();
 
@@ -140,6 +149,8 @@ namespace super_planner {
         typedef std::shared_ptr<CIRI_e> Ptr;
 
         void setupParams(double robot_r, int iter_num);
+        
+        super_utils::Mat3f computeCovariance(const Eigen::Vector3d& point);
 
         RET_CODE convexDecomposition(const Eigen::MatrixX4d &bd,
                                      const Eigen::Matrix3Xd &pc,

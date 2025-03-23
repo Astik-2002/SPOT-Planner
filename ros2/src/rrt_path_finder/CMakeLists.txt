@@ -20,6 +20,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(cv_bridge)
 
 # Manually specify the path to custom_interface_gym
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_INSTALL_PREFIX}/custom_interface_gym/share/custom_interface_gym/cmake)
@@ -229,7 +230,30 @@ ament_target_dependencies(pcd_manipulation
 target_compile_features(pcd_manipulation PUBLIC c_std_99 cxx_std_17)
 
 
+set(SOURCES_PCD_GEN
+  src/pcd_gen.cpp
+)
 
+# Declare the executable for rrt_node_new_replan
+add_executable(pcd_gen ${SOURCES_PCD_GEN})
+
+# Link dependencies for new_replan
+ament_target_dependencies(pcd_gen
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  cv_bridge
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+)
+
+target_compile_features(pcd_gen PUBLIC c_std_99 cxx_std_17)
 
 
 ############
@@ -283,7 +307,7 @@ target_link_libraries(safe_node  ${PCL_LIBRARIES})
 
 ############
 # Install targets
-install(TARGETS rrt_node trajectory_server new_replan safe_node pcd_manipulation new_replan_firi
+install(TARGETS rrt_node trajectory_server new_replan safe_node pcd_manipulation new_replan_firi pcd_gen
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -359,6 +383,7 @@ ament_package()
 # # Add source files for rrt_node
 # set(SOURCES_RRT_NODE
 #   src/corridor_finder.cpp
+#   src/corridor_finder_ellip.cpp
 #   src/kdtree.c
 #   src/rrt_node.cpp
 #   src/ciri.cpp
@@ -408,6 +433,7 @@ ament_package()
 # # Add source files for rrt_node
 # set(SOURCES_RRT_NODE_PX4
 #   src/corridor_finder.cpp
+#   src/corridor_finder_ellip.cpp
 #   src/kdtree.c
 #   src/rrt_node_px4.cpp
 #   src/ciri.cpp
@@ -486,6 +512,7 @@ ament_package()
 
 # set(SOURCES_NEW_REPLAN
 #   src/corridor_finder.cpp
+#   src/corridor_finder_ellip.cpp
 #   src/kdtree.c
 #   src/rrt_node_new_replan.cpp
 #   src/ciri.cpp
@@ -561,6 +588,7 @@ ament_package()
 # # Add source files for rrt_node
 # set(SOURCES_RRT_SAFE_NODE
 #   src/corridor_finder.cpp
+#   src/corridor_finder_ellip.cpp
 #   src/kdtree.c
 #   src/rrt_node_safe_replan.cpp
 #   src/ciri.cpp
@@ -645,6 +673,7 @@ ament_package()
 #   sensor_msgs
 #   px4_msgs
 #   tf2_ros
+#   pcl_conversions
 #   tf2_sensor_msgs
 #   tf2_geometry_msgs
 #   tf2
