@@ -14,13 +14,17 @@ uint32 ACTION_WARN_IMPOSSIBLE      = 5  # Warning: impossible trajectory
 uint32 ACTION_BACKUP      = 6  # backup trajectory
 uint32 action                       # Action type
 
+uint32 YAW_ENABLED_TRUE = 7   
+uint32 YAW_ENABLED_FALSE = 8
+uint32 yaw_enabled # 7 if true, 8 if false
 # Trajectory order and segments.
 uint32 num_order                    # Polynomial order of the trajectory (D)
 uint32 num_segment                  # Number of trajectory segments
 
 # Array of flattened matrices (as a single sequence of float64)
 float64[] matrices_flat             # Flattened sequence of matrix values
-
+float64[] yaw_control_points        # sequence of control points for yaw spline
+float64 yaw_interval                # duration value to define yaw spline
 # Duration for each segment
 float64[] duration_vector                      # Duration for each segment
 

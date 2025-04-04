@@ -60,9 +60,9 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 0.4);
-        this->declare_parameter("uav_radius", 0.3);
-        this->declare_parameter("search_margin", 0.2);
+        this->declare_parameter("safety_margin", 0.7);
+        this->declare_parameter("uav_radius", 0.7);
+        this->declare_parameter("search_margin", 0.3);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -1082,6 +1082,7 @@ private:
           yaw = last_yaw + diff + 2 * M_PI;
         }
     }
+
     void traj_generation(Eigen::Vector3d _traj_start_pos, Eigen::Vector3d _traj_start_vel, Eigen::Vector3d _traj_start_acc)
     {
         auto t1 = std::chrono::steady_clock::now();
@@ -1203,8 +1204,8 @@ private:
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
             // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-            convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-            // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+            // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+            convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
             // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
@@ -1273,8 +1274,8 @@ private:
                 auto t1 = std::chrono::steady_clock::now();
 
                 // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-                convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-                // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+                // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+                convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 // polygon_dilation(hpolys);
                 // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 

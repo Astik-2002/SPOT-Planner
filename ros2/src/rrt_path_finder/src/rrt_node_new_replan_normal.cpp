@@ -42,8 +42,7 @@
 #include "rrt_path_finder/quickhull.hpp"
 #include "rrt_path_finder/voxel_map.hpp"
 #include "rrt_path_finder/corridor_finder_ellip.h"
-#include "rrt_path_finder/yaw_optimization.hpp"
-#include "rrt_path_finder/non_uniform_bspline.hpp"
+
 using namespace std;
 using namespace Eigen;
 using namespace pcl;
@@ -61,8 +60,8 @@ public:
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
         this->declare_parameter("safety_margin", 0.4);
-        this->declare_parameter("uav_radius", 0.3);
-        this->declare_parameter("search_margin", 0.2);
+        this->declare_parameter("uav_radius", 0.4);
+        this->declare_parameter("search_margin", 0.0);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -82,8 +81,8 @@ public:
         this->declare_parameter("z_l", 0.8);
 
         // this->declare_parameter("z_h", 1.0);
-        this->declare_parameter("z_h2", 2.0);
-        this->declare_parameter("z_h", 2.0);
+        this->declare_parameter("z_h2", 1.7);
+        this->declare_parameter("z_h", 1.7);
 
         this->declare_parameter("target_x", 0.0);   
         this->declare_parameter("target_y", 0.0);
@@ -218,9 +217,9 @@ private:
     float smoothingEps = 0.01;
     float relcostto1 = 0.00001;
     int _max_samples;
-    double _commit_distance = 6.0;
+    double _commit_distance = 5.0;
     double current_yaw = 0;
-    double max_vel = 0.5;
+    double max_vel = 1.0;
     float threshold = 0.8;
     int trajectory_id = 0;
     int order = 5;
@@ -235,7 +234,6 @@ private:
     super_planner::CIRI_e ciri_e;
     super_planner::CIRI_s ciri_s;
     super_planner::CIRI ciri;
-    yawOptimizer yaw_opt;
     Eigen::Vector3d pcd_origin;
     voxel_map::VoxelMap V_map;
     int max_iter=100000;
@@ -264,7 +262,6 @@ private:
     bool _is_target_receive = false;
     bool _is_has_map = false;
     bool _is_complete = false;
-    bool _is_yaw_enabled = true;
     bool uncertanity_compensation = true;
 
 
@@ -288,9 +285,7 @@ private:
     // Initializing rrt parameters
     void setRRTPlannerParams()
     {
-        // _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation, _uav_radius);
         _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
-
         _rrtPathPlanner.reset();
     }
 
@@ -338,16 +333,16 @@ private:
 
             // std::cout<<"[commit debug] distance to endgoal: "<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
         }
-        // if(_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1.0)
-        // {
-        //     _is_complete = true;   
-        // }
+        if(_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1.0)
+        {
+            _is_complete = true;   
+        }
         checkSafeTrajectory();
         // std::cout<<"[odom callback] distance to commit target: "<<_rrtPathPlanner.getDis(_start_pos, _commit_target)<<std::endl;
         // std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
         // std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
 
-        // std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
+        std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
 
         // RCLCPP_WARN(this->get_logger(), "Received odometry: position(x: %.2f, y: %.2f, z: %.2f)",
                // _odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose);
@@ -885,7 +880,7 @@ private:
         std::vector<Eigen::Vector3d> valid_pc;
         std::vector<Eigen::Vector3d> bs;
         valid_pc.reserve(pcd_points.size());
-        ciri_s.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
+        ciri_s.setupParams(_uav_radius, 1); // Setup CIRI with robot radius and iteration number
 
         for (int i = 0; i < n;)
         {
@@ -999,89 +994,6 @@ private:
         }
     }
 
-    void yaw_traj_generation(Trajectory<5> _traj, custom_interface_gym::msg::DesTrajectory &des_traj_msg)
-    {
-        double last_yaw = current_yaw;
-        double tot_time = _traj.getTotalDuration();
-        double dt_yaw = 0.1;
-        int seg_num = ceil(tot_time / dt_yaw);
-        dt_yaw = tot_time / seg_num;
-        double forward_t = 0.1;
-
-        std::vector<double> psi_vec;
-        std::vector<int> wp_idx_vec;
-
-        for (int i = 0; i < seg_num; i++) {
-            double tc = i * dt_yaw;
-            auto p1 = _traj.getPos(tc);
-            double tf = std::min(tot_time, tc + forward_t);
-            auto p2 = _traj.getPos(tf);
-            auto pd = p2 - p1;
-
-            double des_yaw = 0.0;
-            if (pd.norm() > 1e-6) {
-                des_yaw = atan2(pd[1], pd[0]);
-                calcNextYaw(last_yaw, des_yaw);  // Ensure continuity
-            } else if (!psi_vec.empty()) {
-                des_yaw = psi_vec.back();
-            }
-
-            psi_vec.push_back(des_yaw);
-            wp_idx_vec.push_back(i);
-        }
-
-        // Convert start and end yaw into control points using states2pts
-        Eigen::Vector3d start_yaw_state, end_yaw_state;
-        start_yaw_state << psi_vec.front(), 0.0, 0.0; // Assume yaw_dot = yaw_ddot = 0
-        auto end_vel = _traj.getVel(tot_time - 0.1);
-        double end_yaw = atan2(end_vel[1], end_vel[0]);
-        calcNextYaw(last_yaw, end_yaw);
-        end_yaw_state << end_yaw, 0.0, 0.0;
-
-        Eigen::Matrix3d states2pts;
-        states2pts << 
-            1.0, -dt_yaw, (1.0 / 3.0) * dt_yaw * dt_yaw,
-            1.0, 0.0,     -(1.0 / 6.0) * dt_yaw * dt_yaw,
-            1.0, dt_yaw,  (1.0 / 3.0) * dt_yaw * dt_yaw;
-
-        Eigen::Vector3d fixed_start = states2pts * start_yaw_state;
-        Eigen::Vector3d fixed_end   = states2pts * end_yaw_state;
-
-        // Number of control points = seg_num + 3 (cubic B-spline)
-        int num_ctrl_pts = seg_num + 3;
-
-        Eigen::MatrixXd yaw_control_points = yaw_opt.optimizeYawTrajCP(dt_yaw, psi_vec, wp_idx_vec, num_ctrl_pts, fixed_start, fixed_end);
-        for(int i = 0; i<yaw_control_points.rows(); i++)
-        {
-            des_traj_msg.yaw_control_points.push_back(yaw_control_points(i,0));
-        }
-        des_traj_msg.yaw_interval = dt_yaw;
-        des_traj_msg.yaw_enabled = des_traj_msg.YAW_ENABLED_TRUE;
-    }
-
-    void calcNextYaw(const double& last_yaw, double& yaw) 
-    {
-        // round yaw to [-PI, PI]
-      
-        double round_last = last_yaw;
-      
-        while (round_last < -M_PI) {
-          round_last += 2 * M_PI;
-        }
-        while (round_last > M_PI) {
-          round_last -= 2 * M_PI;
-        }
-      
-        double diff = yaw - round_last;
-      
-        if (fabs(diff) <= M_PI) {
-          yaw = last_yaw + diff;
-        } else if (diff > M_PI) {
-          yaw = last_yaw + diff - 2 * M_PI;
-        } else if (diff < -M_PI) {
-          yaw = last_yaw + diff + 2 * M_PI;
-        }
-    }
     void traj_generation(Eigen::Vector3d _traj_start_pos, Eigen::Vector3d _traj_start_vel, Eigen::Vector3d _traj_start_acc)
     {
         auto t1 = std::chrono::steady_clock::now();
@@ -1172,11 +1084,6 @@ private:
                 }
             }
             des_traj_msg.debug_info = "trajectory_id: "+std::to_string(trajectory_id-1);
-
-            if(_is_yaw_enabled)
-            {
-                yaw_traj_generation(_traj, des_traj_msg);
-            }
             _rrt_des_traj_pub->publish(des_traj_msg);
             _commit_target = _traj.getPos(_traj.getTotalDuration()*0.5);
             
@@ -1203,8 +1110,8 @@ private:
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
             // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-            convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-            // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+            // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+            convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
             // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
@@ -1273,8 +1180,8 @@ private:
                 auto t1 = std::chrono::steady_clock::now();
 
                 // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-                convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-                // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+                // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+                convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 // polygon_dilation(hpolys);
                 // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 

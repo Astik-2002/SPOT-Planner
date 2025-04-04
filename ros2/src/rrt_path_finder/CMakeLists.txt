@@ -33,7 +33,7 @@ include_directories(
   ${CMAKE_INSTALL_PREFIX}/custom_interface_gym/include
   ${CMAKE_INSTALL_PREFIX}/custom_interface_gym/include/custom_interface_gym
   ${CMAKE_SOURCE_DIR}/data_structure
-  ${CMAKE_SOURCE_DIR}/data_structure/base  # ADD THIS LINE
+  ${CMAKE_SOURCE_DIR}/data_structure/base
   ${CMAKE_SOURCE_DIR}/utils
   ${CMAKE_SOURCE_DIR}/utils/optimization
   ${CMAKE_SOURCE_DIR}/utils/geometry
@@ -43,6 +43,7 @@ include_directories(
 # Add source files for rrt_node
 set(SOURCES_RRT_NODE
   src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
   src/corridor_finder_ellip.cpp
   src/kdtree.c
   src/rrt_node.cpp
@@ -119,35 +120,44 @@ ament_target_dependencies(trajectory_server
 # Ensure C++17 and C99 standards for trajectory_server (SAME AS rrt_node)
 target_compile_features(trajectory_server PUBLIC c_std_99 cxx_std_17)
 
+# Add source files for trajectory_server
+set(SOURCES_TRAJECTORY_SERVER_YAW
+  src/trajectory_server_yaw.cpp
+  src/non_uniform_bspline.cpp
+)
+
+# Declare the executable for trajectory_server
+add_executable(trajectory_server_yaw ${SOURCES_TRAJECTORY_SERVER_YAW})
+
+# Link the PCL libraries for trajectory_server (SAME AS rrt_node)
+target_link_libraries(trajectory_server_yaw  ${PCL_LIBRARIES})
+
+# Link dependencies for trajectory_server
+ament_target_dependencies(trajectory_server_yaw
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+)
+
+# Ensure C++17 and C99 standards for trajectory_server (SAME AS rrt_node)
+target_compile_features(trajectory_server_yaw PUBLIC c_std_99 cxx_std_17)
+
 
 set(SOURCES_NEW_REPLAN
   src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
   src/corridor_finder_ellip.cpp
   src/kdtree.c
   src/rrt_node_new_replan.cpp
-  src/ciri.cpp
-  src/ciri_ellip.cpp
-  src/ciri_sphere.cpp
-  src/utils/banded_system.cpp
-  src/utils/ellipsoid.cpp
-  src/utils/geometry_utils.cpp
-  src/utils/lbfgs.cpp
-  src/utils/mvie.cpp
-  src/utils/optimization_utils.cpp
-  src/utils/piece.cpp
-  src/utils/polynomial_interpolation.cpp
-  src/utils/polytope.cpp
-  src/utils/quickhull.cpp
-  src/utils/root_finder.cpp
-  src/utils/sdlp.cpp
-  src/utils/trajectory.cpp
-)
-
-set(SOURCES_NEW_REPLAN_FIRI
-  src/corridor_finder.cpp
-  src/corridor_finder_ellip.cpp
-  src/kdtree.c
-  src/rrt_node_firi.cpp
   src/ciri.cpp
   src/ciri_ellip.cpp
   src/ciri_sphere.cpp
@@ -185,11 +195,122 @@ ament_target_dependencies(new_replan
   custom_interface_gym
 )
 
+
+set(SOURCES_NEW_REPLAN_NORMAL_YAW
+  src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
+  src/corridor_finder_ellip.cpp
+  src/kdtree.c
+  src/rrt_node_new_replan_normal_yaw.cpp
+  src/ciri.cpp
+  src/ciri_ellip.cpp
+  src/ciri_sphere.cpp
+  src/utils/banded_system.cpp
+  src/utils/ellipsoid.cpp
+  src/utils/geometry_utils.cpp
+  src/utils/lbfgs.cpp
+  src/utils/mvie.cpp
+  src/utils/optimization_utils.cpp
+  src/utils/piece.cpp
+  src/utils/polynomial_interpolation.cpp
+  src/utils/polytope.cpp
+  src/utils/quickhull.cpp
+  src/utils/root_finder.cpp
+  src/utils/sdlp.cpp
+  src/utils/trajectory.cpp
+)
+
+# Declare the executable for rrt_node_new_replan
+add_executable(new_replan_normal_yaw ${SOURCES_NEW_REPLAN_NORMAL_YAW})
+
+# Link dependencies for new_replan
+ament_target_dependencies(new_replan_normal_yaw
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+)
+
+set(SOURCES_NEW_REPLAN_FIRI
+  src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
+  src/corridor_finder_ellip.cpp
+  src/kdtree.c
+  src/rrt_node_firi.cpp
+  src/ciri.cpp
+  src/ciri_ellip.cpp
+  src/ciri_sphere.cpp
+  src/utils/banded_system.cpp
+  src/utils/ellipsoid.cpp
+  src/utils/geometry_utils.cpp
+  src/utils/lbfgs.cpp
+  src/utils/mvie.cpp
+  src/utils/optimization_utils.cpp
+  src/utils/piece.cpp
+  src/utils/polynomial_interpolation.cpp
+  src/utils/polytope.cpp
+  src/utils/quickhull.cpp
+  src/utils/root_finder.cpp
+  src/utils/sdlp.cpp
+  src/utils/trajectory.cpp
+)
+
 # Declare the executable for rrt_node_firi
 add_executable(new_replan_firi ${SOURCES_NEW_REPLAN_FIRI})
 
 # Link dependencies for rrt_node_firi
 ament_target_dependencies(new_replan_firi
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+)
+
+set(SOURCES_NEW_REPLAN_NORMAL
+  src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
+  src/corridor_finder_ellip.cpp
+  src/kdtree.c
+  src/rrt_node_new_replan_normal.cpp
+  src/ciri.cpp
+  src/ciri_ellip.cpp
+  src/ciri_sphere.cpp
+  src/utils/banded_system.cpp
+  src/utils/ellipsoid.cpp
+  src/utils/geometry_utils.cpp
+  src/utils/lbfgs.cpp
+  src/utils/mvie.cpp
+  src/utils/optimization_utils.cpp
+  src/utils/piece.cpp
+  src/utils/polynomial_interpolation.cpp
+  src/utils/polytope.cpp
+  src/utils/quickhull.cpp
+  src/utils/root_finder.cpp
+  src/utils/sdlp.cpp
+  src/utils/trajectory.cpp
+)
+
+# Declare the executable for rrt_node_firi
+add_executable(new_replan_normal ${SOURCES_NEW_REPLAN_NORMAL})
+
+# Link dependencies for rrt_node_firi
+ament_target_dependencies(new_replan_normal
   rclcpp
   nav_msgs
   sensor_msgs
@@ -262,6 +383,7 @@ target_compile_features(pcd_gen PUBLIC c_std_99 cxx_std_17)
 # Add source files for rrt_node
 set(SOURCES_RRT_SAFE_NODE
   src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
   src/corridor_finder_ellip.cpp
   src/kdtree.c
   src/rrt_node_safe_replan.cpp
@@ -307,7 +429,7 @@ target_link_libraries(safe_node  ${PCL_LIBRARIES})
 
 ############
 # Install targets
-install(TARGETS rrt_node trajectory_server new_replan safe_node pcd_manipulation new_replan_firi pcd_gen
+install(TARGETS rrt_node trajectory_server trajectory_server_yaw new_replan safe_node pcd_manipulation new_replan_firi new_replan_normal new_replan_normal_yaw pcd_gen
   DESTINATION lib/${PROJECT_NAME}
 )
 

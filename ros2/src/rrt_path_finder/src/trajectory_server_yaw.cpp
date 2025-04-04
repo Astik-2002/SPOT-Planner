@@ -12,14 +12,14 @@
 #include "rrt_path_finder/trajectory.hpp"
 #include "rrt_path_finder/geo_utils.hpp"
 #include "rrt_path_finder/quickhull.hpp"
-
+#include "rrt_path_finder/non_uniform_bspline.hpp"
 #include <Eigen/Eigen>
 #include <vector>
 #include <iostream>
 
 constexpr int D = 5; // Polynomial order D (for example, 5)
 
-class TrajectoryServer : public rclcpp::Node
+class TrajectoryServerYaw : public rclcpp::Node
 {
 private:
     rclcpp::Subscription<custom_interface_gym::msg::DesTrajectory>::SharedPtr trajectory_sub;
@@ -32,6 +32,8 @@ private:
     // Store current trajectory
     std::vector<Eigen::Matrix<double, 3, 6>> current_coefficients;  // Vector of (3, D+1) matrices for each trajectory segment
     std::vector<double> segment_durations;
+    Eigen::MatrixXd yaw_control_points;
+    double yaw_interval;
     Eigen::Vector3d current_pos{-2.0, 0.0, 1.5};
     Eigen::Vector3d end_pos, yaw_target;
     bool _is_target_receive = false;
@@ -40,11 +42,13 @@ private:
     int num_segments;
     int order = D+1;
     Trajectory<5> _traj;
+    NonUniformBspline yaw_traj;
     int trajectory_id = 0;
     rclcpp::Time trajectory_start_time;
     bool has_trajectory;
     bool is_aborted;
     bool hover_command_sent = false;
+    bool _is_yaw_enabled = false;
     nav_msgs::msg::Odometry _odom;
     rclcpp::Time _final_time = rclcpp::Time(0);
     rclcpp::Time _start_time = rclcpp::Time::max();
@@ -61,28 +65,28 @@ private:
 
 
 public:
-    TrajectoryServer()
+TrajectoryServerYaw()
         : Node("trajectory_server"),
           has_trajectory(false),
           is_aborted(false)
     {
         // Initialize subscribers and publishers
         trajectory_sub = this->create_subscription<custom_interface_gym::msg::DesTrajectory>(
-            "des_trajectory", 10, std::bind(&TrajectoryServer::trajectoryCallback, this, std::placeholders::_1));
+            "des_trajectory", 10, std::bind(&TrajectoryServerYaw::trajectoryCallback, this, std::placeholders::_1));
         
         odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
-            "odom", 10, std::bind(&TrajectoryServer::rcvOdomCallback, this, std::placeholders::_1));
+            "odom", 10, std::bind(&TrajectoryServerYaw::rcvOdomCallback, this, std::placeholders::_1));
 
         dest_pts_sub = this->create_subscription<nav_msgs::msg::Path>(
-            "waypoints", 1, std::bind(&TrajectoryServer::rcvGoalCallback, this, std::placeholders::_1));
+            "waypoints", 1, std::bind(&TrajectoryServerYaw::rcvGoalCallback, this, std::placeholders::_1));
 
         yaw_target_sub = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-            "corridor_endpoint", 1, std::bind(&TrajectoryServer::rcvYawCallback, this, std::placeholders::_1));
+            "corridor_endpoint", 1, std::bind(&TrajectoryServerYaw::rcvYawCallback, this, std::placeholders::_1));
 
         command_pub = this->create_publisher<custom_interface_gym::msg::TrajMsg>("rrt_command",10);
         // Timer for periodic command updates
         command_timer = this->create_wall_timer(
-            std::chrono::milliseconds(10), std::bind(&TrajectoryServer::commandCallback, this));
+            std::chrono::milliseconds(10), std::bind(&TrajectoryServerYaw::commandCallback, this));
     }
 
     void rcvOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -173,6 +177,7 @@ public:
         _final_time = _start_time;
         segment_durations.clear();
         current_coefficients.clear();
+        yaw_control_points.resize(0, 0);
         segment_durations = msg->duration_vector;
         num_segments = msg->num_segment;
         order = msg->num_order;
@@ -198,103 +203,22 @@ public:
         //     std::cout<<mat<<std::endl;
         // }
         _traj.setParameters(segment_durations, current_coefficients);
+        if(msg->yaw_enabled == custom_interface_gym::msg::DesTrajectory::YAW_ENABLED_TRUE)
+        {
+            _is_yaw_enabled = true;
+            yaw_control_points = Eigen::MatrixXd::Zero(msg->yaw_control_points.size(), 1);
+
+            for(int i = 0; i<msg->yaw_control_points.size(); i++)
+            {
+                yaw_control_points(i,0) = msg->yaw_control_points[i];
+            }
+            yaw_interval = msg->yaw_interval;
+            yaw_traj.setUniformBspline(yaw_control_points, 1, yaw_interval);
+        }
         std::cout<<"in handle add trajectory callback, traj set successfully"<<std::endl;
 
         // RCLCPP_WARN(this->get_logger(), "Added trajectory with %lu segments.", msg->num_segment);
         
-    }
-
-    void handleBackupTrajectory(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
-    {
-        std::cout<<"in handle backup trajectory callback"<<std::endl;
-        has_trajectory = true;
-        is_aborted = false;
-        hover_command_sent = false;
-        _traj.clear();
-        trajectory_id = msg->trajectory_id;
-        _start_time = msg->header.stamp;
-        _final_time = _start_time;
-        segment_durations.clear();
-        current_coefficients.clear();
-        segment_durations = msg->duration_vector;
-        num_segments = msg->num_segment;
-        order = msg->num_order;
-
-        std::vector<double> array_msg_traj;
-        array_msg_traj = msg->matrices_flat;
-
-        for (int i = 0; i < segment_durations.size(); ++i) 
-        {
-            Eigen::Map<const Eigen::Matrix<double, 3, 6, Eigen::RowMajor>> matrix(
-            array_msg_traj.data() + i * 3 * 6); // Starting point in the vector
-
-            // Store the matrix in the output vector
-            current_coefficients.push_back(matrix);
-
-            std::chrono::duration<double> duration_in_sec(segment_durations[i]);
-            rclcpp::Duration rcl_duration(duration_in_sec);
-
-        }
-        _traj.setParameters(segment_durations, current_coefficients);
-        std::cout<<"in handle backup trajectory callback, traj set successfully"<<std::endl;
-        
-    }
-
-    void handleAbortTrajectory()
-    {
-        has_trajectory = false;
-        is_aborted = true;
-        RCLCPP_WARN(this->get_logger(), "Trajectory aborted.");
-    }
-
-    void handleFinalTrajectory()
-    {
-        _is_goal_arrive = true;
-    }
-
-    void saturate(double& value, double min_val, double max_val)
-    {
-        value = std::min(std::max(value, min_val), max_val);
-    }
-
-    void angle_wrap(double& angle)
-    {
-        while (angle > M_PI) angle -= 2 * M_PI;
-        while (angle < -M_PI) angle += 2 * M_PI;
-    }
-
-    void yaw(double diff, custom_interface_gym::msg::TrajMsg& next_goal)
-    {
-        saturate(diff, -par_.dc * par_.w_max, par_.dc * par_.w_max);
-        double dyaw_not_filtered = copysign(1.0, diff) * par_.w_max;
-
-        dyaw_filtered_ = (1 - par_.alpha_filter_dyaw) * dyaw_not_filtered +
-                         par_.alpha_filter_dyaw * dyaw_filtered_;
-        next_goal.yaw = previous_yaw_ + dyaw_filtered_ * par_.dc;
-    }
-
-    void getDesiredYaw(custom_interface_gym::msg::TrajMsg& next_goal, const Eigen::Vector3d& current_pos, const Eigen::Vector3d& goal_pos, const Eigen::Vector3d& heading_pos)
-    {
-        // Face the goal
-        // double desired_yaw = atan2(goal_pos.y() - current_pos.y(),
-        //                     goal_pos.x() - current_pos.x());
-        double desired_yaw = 0.0;
-        if (face_yaw_goal)
-        {
-            // Face the goal
-            desired_yaw = atan2(goal_pos.y() - current_pos.y(),
-                                goal_pos.x() - current_pos.x());
-        }
-        else
-        {
-            // Face the direction of travel
-            Eigen::Vector3d direction = heading_pos - current_pos;
-            desired_yaw = atan2(direction.y(), direction.x());
-        }
-        double diff = desired_yaw - previous_yaw_;
-        angle_wrap(diff);
-
-        yaw(diff, next_goal);
     }
 
     void commandCallback()
@@ -386,24 +310,81 @@ public:
         traj_msg.jerk.z = des_jerk.z();
 
         // Set yaw 
-        getDesiredYaw(traj_msg, current_pos, yaw_target, des_pos);
-        // traj_msg.yaw = 0;
-        // std::cout<<"[Traj follow] error in position: "<<(current_pos - des_pos).norm()<<std::endl;
-
-        // Publish the message
+        double yaw_des = 0.0;
+        if(_is_yaw_enabled)
+        {
+            Eigen::VectorXd yaw_vec = yaw_traj.evaluateDeBoorT(elapsed);
+            yaw_des = yaw_vec(0);
+        }
+        
+        traj_msg.yaw = yaw_des;
         std::cout<<"debug states: "<<std::endl;
         std::cout<<"Elapsed: "<<elapsed<<std::endl;
 
         std::cout<<"POS x: "<<des_pos.x()<<" y: "<<des_pos.y()<<" z: "<<des_pos.z()<<std::endl;
         std::cout<<"Vel x: "<<des_vel.x()<<" y: "<<des_vel.y()<<" z: "<<des_vel.z()<<std::endl;
+        std::cout<<"Yaw: "<<yaw_des<<std::endl;
+
+        // std::cout<<"[Traj follow] error in position: "<<(current_pos - des_pos).norm()<<std::endl;
+
+        // Publish the message
         command_pub->publish(traj_msg); // Replace traj_publisher_ with your actual publisher variable
     }
+
+    void handleBackupTrajectory(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
+    {
+        std::cout<<"in handle backup trajectory callback"<<std::endl;
+        has_trajectory = true;
+        is_aborted = false;
+        hover_command_sent = false;
+        _traj.clear();
+        trajectory_id = msg->trajectory_id;
+        _start_time = msg->header.stamp;
+        _final_time = _start_time;
+        segment_durations.clear();
+        current_coefficients.clear();
+        segment_durations = msg->duration_vector;
+        num_segments = msg->num_segment;
+        order = msg->num_order;
+
+        std::vector<double> array_msg_traj;
+        array_msg_traj = msg->matrices_flat;
+
+        for (int i = 0; i < segment_durations.size(); ++i) 
+        {
+            Eigen::Map<const Eigen::Matrix<double, 3, 6, Eigen::RowMajor>> matrix(
+            array_msg_traj.data() + i * 3 * 6); // Starting point in the vector
+
+            // Store the matrix in the output vector
+            current_coefficients.push_back(matrix);
+
+            std::chrono::duration<double> duration_in_sec(segment_durations[i]);
+            rclcpp::Duration rcl_duration(duration_in_sec);
+
+        }
+        _traj.setParameters(segment_durations, current_coefficients);
+        std::cout<<"in handle backup trajectory callback, traj set successfully"<<std::endl;
+        
+    }
+
+    void handleAbortTrajectory()
+    {
+        has_trajectory = false;
+        is_aborted = true;
+        RCLCPP_WARN(this->get_logger(), "Trajectory aborted.");
+    }
+
+    void handleFinalTrajectory()
+    {
+        _is_goal_arrive = true;
+    }
+
 };
 
 int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<TrajectoryServer>());
+    rclcpp::spin(std::make_shared<TrajectoryServerYaw>());
     rclcpp::shutdown();
     return 0;
 }

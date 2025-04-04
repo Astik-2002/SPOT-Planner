@@ -135,6 +135,26 @@ namespace super_planner {
             return false;
         }
 
+        static void SeedAdjustment(const Ellipsoid E_pw, Eigen::Vector3d &A, Eigen::Vector3d &B)
+        {
+            if(E_pw.inside(A))
+            {
+                Eigen::Vector3d direction = A - E_pw.d();
+                direction.normalize();
+                super_utils::Mat3f covariance = E_pw.C();
+                double ellipsoid_extent = 1.0 / sqrt(direction.transpose() * covariance.inverse() * direction);
+                A = A + 1.5*ellipsoid_extent*direction;
+            }
+            if(E_pw.inside(B))
+            {
+                Eigen::Vector3d direction = B - E_pw.d();
+                direction.normalize();
+                super_utils::Mat3f covariance = E_pw.C();
+                double ellipsoid_extent = 1.0 / sqrt(direction.transpose() * covariance.inverse() * direction);
+                B = B + 1.5*ellipsoid_extent*direction;
+            }
+        }
+
     public:
         CIRI_e();
 
@@ -154,8 +174,8 @@ namespace super_planner {
 
         RET_CODE convexDecomposition(const Eigen::MatrixX4d &bd,
                                      const Eigen::Matrix3Xd &pc,
-                                     const Eigen::Vector3d &a,
-                                     const Eigen::Vector3d &b,
+                                      Eigen::Vector3d &a,
+                                      Eigen::Vector3d &b,
                                      const Eigen::Vector3d &o,
                                      std::vector<Ellipsoid> &tangent_obs,
                                      bool uncertanity);

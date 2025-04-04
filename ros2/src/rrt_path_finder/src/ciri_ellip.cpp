@@ -77,10 +77,10 @@ namespace super_planner {
         super_utils::Mat3f R_tf_inv = R_tf.inverse();
         Eigen::Vector3d point_cam = R_tf_inv * point;
         double x = point_cam[0], y = point_cam[1], z = point_cam[2];
-        // double k1 = 0.04;
-        // double sz = 0.001063 + 0.0007278 * z + 0.003949 * z * z;
-        double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
-        double k1 = 0.0016;
+        double k1 = 0.04;
+        double sz = 0.001063 + 0.0007278 * z + 0.003949 * z * z;
+        // double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
+        // double k1 = 0.0016;
         double k12 = k1*k1;
         super_utils::Mat3f Sigma;
         Sigma << k12 + pow(x*sz/z,2), x*y*pow(sz/z,2), x/z*pow(sz,2),
@@ -91,8 +91,8 @@ namespace super_planner {
         return Sigma;
     }
 
-    RET_CODE CIRI_e::convexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, const Eigen::Vector3d& a,
-                                       const Eigen::Vector3d& b, const Eigen::Vector3d &o, std::vector<Ellipsoid> &tangent_obs, bool uncertanity) {
+    RET_CODE CIRI_e::convexDecomposition(const Eigen::MatrixX4d& bd, const Eigen::Matrix3Xd& pc, Eigen::Vector3d& a,
+                                       Eigen::Vector3d& b, const Eigen::Vector3d &o, std::vector<Ellipsoid> &tangent_obs, bool uncertanity) {
         const Eigen::Vector4d ah(a(0), a(1), a(2), 1.0);
         const Eigen::Vector4d bh(b(0), b(1), b(2), 1.0);
 
@@ -122,14 +122,40 @@ namespace super_planner {
 //        bool infeasible_problem{false};
         Vec3f infeasible_pt_w;
         
-        auto noise_pc = computePointCloudNoise(pc, o);
         std::vector<Ellipsoid> E_pw_vec;
         for(int i = 0; i<N; i++)
         {
-            Vec3f noise_vec = noise_pc.col(i);
             Vec3f point_vec = pc.col(i);
-            Mat3f cov = computeCovariance(point_vec);
-            auto temp = Ellipsoid(cov, point_vec, robot_r_, 11.33);
+            Mat3f cov = computeCovariance(point_vec - o);
+            double k;
+            double norm_val = (point_vec - o).norm();
+            int category;
+            if (norm_val < 2.0)
+                category = 0;
+            else if (norm_val < 4.5)
+                category = 1;
+            else if (norm_val < 6.0)
+                category = 2;
+            else
+                category = 3;
+
+            switch (category)
+            {
+                case 0:
+                    k = sqrt(7.81);
+                    break;
+                case 1:
+                    k = sqrt(6.25);
+                    break;
+                case 2:
+                    k = sqrt(3.53);
+                    break;
+                default:
+                    k = 1.0;
+                    break;
+            }
+            
+            auto temp = Ellipsoid(cov, point_vec, robot_r_, k);
             E_pw_vec.push_back(temp);
             E_pw_vec.push_back(temp);
         }
@@ -176,14 +202,9 @@ namespace super_planner {
                     const auto & pt_w = pc.col(pcMinId);
                     auto E_pw = E_pw_vec[pcMinId];
                     // const auto dis = distancePointToSegment(pt_w,a,b);
+                    SeedAdjustment(E_pw, a, b);
                     const auto Notvalid = EllipsoidExtentViolation(E_pw, a, b);
                     double uncertain_radius = 0;
-                    // if(uncertanity)
-                    // {
-                    //     auto noise_pt_w = noise_pc.col(pcMinId);
-                    //     uncertain_radius = noise_pt_w.maxCoeff()*sqrt(11.3345);
-                    //     robot_r_ = robot_r_ + uncertain_radius;
-                    // }
                     if(Notvalid) {
                         // infeasible_problem = true;
                         infeasible_pt_w = pt_w;
@@ -226,7 +247,6 @@ namespace super_planner {
                         const Vec3f &pt_e = pc_e.col(pcMinId);
                         const Vec3f &pt_w = pc.col(pcMinId);
                         Ellipsoid E_pw;
-                        auto noise_pt_w = noise_pc.col(pcMinId);
                         if(uncertanity)
                         {
                             std::cout<<"Entered ellipsoid configuration"<<std::endl;
@@ -240,7 +260,7 @@ namespace super_planner {
                         else
                         {
                             std::cout<<"Entered sphere configuration"<<std::endl;
-                            sphere_template_ = Ellipsoid(Mat3f::Identity(), noise_pt_w.maxCoeff()*Vec3f(1, 1, 1), Vec3f(0, 0, 0));
+                            sphere_template_ = Ellipsoid(Mat3f::Identity(), robot_r_*Vec3f(1, 1, 1), Vec3f(0, 0, 0));
                             Ellipsoid E_pe(C_inv * sphere_template_.C(), pt_e);
                             Vec3f close_pt_e;
                             E_pe.pointDistaceToEllipsoid(Vec3f(0, 0, 0), close_pt_e);
@@ -259,7 +279,7 @@ namespace super_planner {
                             }
                             else
                             {
-                                findTangentPlaneOfSphere(pt_w, noise_pt_w.maxCoeff(), a, E.d(), temp_plane_w);
+                                findTangentPlaneOfSphere(pt_w, robot_r_, a, E.d(), temp_plane_w);
                             }
                         } else if (temp_plane_w.head(3).dot(b) + temp_plane_w(3) > -epsilon_) {
                             std::cout<<"case B"<<std::endl;
@@ -270,7 +290,7 @@ namespace super_planner {
                             }
                             else
                             {
-                                findTangentPlaneOfSphere(pt_w, noise_pt_w.maxCoeff(), b, E.d(), temp_plane_w);
+                                findTangentPlaneOfSphere(pt_w, robot_r_, b, E.d(), temp_plane_w);
                             }
                         }
                     }
@@ -311,7 +331,7 @@ namespace super_planner {
                         }
                         else
                         {
-                            if ((temp_plane_w.head(3).dot(pc.col(j)) + temp_plane_w(3)) > noise_pc.col(j).maxCoeff() - epsilon_) {
+                            if ((temp_plane_w.head(3).dot(pc.col(j)) + temp_plane_w(3)) > robot_r_ - epsilon_) {
                                 pcFlags(j) = 0;
                             }
                             else {

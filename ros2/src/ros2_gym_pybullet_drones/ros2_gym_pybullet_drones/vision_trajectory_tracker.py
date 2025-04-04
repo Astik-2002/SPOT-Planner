@@ -63,10 +63,11 @@ class AviaryWrapper(Node):
                            neighbourhood_radius=np.inf,
                            freq=timer_freq_hz,
                            aggregate_phy_steps=1,
-                           gui=False,
+                           gui=True,
                            record=False,
                            obstacles=True,
-                           user_debug_gui=False
+                           user_debug_gui=False,
+                           environment_file="environment_41.csv"
                            )
         #### Initialize an action with the RPMs at hover ###########
         self.action = np.ones(4)*self.env.HOVER_RPM

@@ -536,7 +536,7 @@ inline NodePtr safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr node
 
 bool safeRegionRrtStar::checkTrajPtCol(Vector3d & pt)
 {     
-    if(radiusSearchCollisionPred(pt) < 0 ) return true;
+    if(radiusSearchCollisionPred(pt) < 0.1 ) return true;
     else return false;
 }
 

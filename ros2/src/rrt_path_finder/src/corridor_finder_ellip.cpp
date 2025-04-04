@@ -21,10 +21,10 @@ super_utils::Mat3f safeRegionRrtStarEllip::computeCovariance(const Eigen::Vector
     super_utils::Mat3f R_tf_inv = R_tf.inverse();
     Eigen::Vector3d point_cam = R_tf_inv * point;
     double x = point_cam[0], y = point_cam[1], z = point_cam[2];
-    // double k1 = 0.04;
-    // double sz = 0.001063 + 0.0007278 * z + 0.003949 * z * z;
-    double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
-    double k1 = 0.0016;
+    double k1 = 0.04;
+    double sz = min(0.001063 + 0.0007278 * z + 0.003949 * z * z, 0.084);
+    // double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
+    // double k1 = 0.0016;
     double k12 = k1*k1;
     super_utils::Mat3f Sigma;
     Sigma << k12 + pow(x*sz/z,2), x*y*pow(sz/z,2), x/z*pow(sz,2),
@@ -202,14 +202,41 @@ inline double safeRegionRrtStarEllip::radiusSearch(Vector3d & search_Pt)
     Eigen::Vector3d obs{nearest_obstacle.x, nearest_obstacle.y, nearest_obstacle.z};
     Eigen::Vector3d obs_camera_frame = obs - pcd_origin;
     Eigen::Vector3d std_dev_vector = computeNoiseStd(obs_camera_frame);  // [a, b, c]
-    super_utils::Mat3f covariance = computeCovariance(obs);
+    super_utils::Mat3f covariance = computeCovariance(obs_camera_frame);
     Eigen::JacobiSVD<Eigen::Matrix3d, Eigen::FullPivHouseholderQRPreconditioner> svd(covariance, Eigen::ComputeFullU);
     Eigen::Matrix3d U = svd.matrixU();
     Eigen::Vector3d S = svd.singularValues();
+    double k;
+    double norm_val = obs_camera_frame.norm();
+    int category;
+    if (norm_val < 2.0)
+        category = 0;
+    else if (norm_val < 4.5)
+        category = 1;
+    else if (norm_val < 6.0)
+        category = 2;
+    else
+        category = 3;
+
+    switch (category)
+    {
+        case 0:
+            k = sqrt(7.81);
+            break;
+        case 1:
+            k = sqrt(6.25);
+            break;
+        case 2:
+            k = sqrt(3.53);
+            break;
+        default:
+            k = 1.0;
+            break;
+    }
     auto R_ = U;
-    S[0] = (S[0])*sqrt(11.35) + uav_radius;
-    S[1] = (S[1])*sqrt(11.35) + uav_radius;
-    S[2] = (S[2])*sqrt(11.35) + uav_radius;
+    S[0] = (S[0])*sqrt(k) + uav_radius;
+    S[1] = (S[1])*sqrt(k) + uav_radius;
+    S[2] = (S[2])*sqrt(k) + uav_radius;
     covariance = R_ * S.asDiagonal() * R_.transpose();
     // Compute direction vector (search_Pt - obs)
     Eigen::Vector3d direction = search_Pt - obs;
@@ -243,29 +270,36 @@ inline double safeRegionRrtStarEllip::radiusSearchCollisionPred( Vector3d & sear
     pointRadiusSquaredDistance.clear();
 
     kdtreeForCollisionPred.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-    double radius = sqrt(pointRadiusSquaredDistance[0]) - search_margin;
+    double radius = sqrt(pointRadiusSquaredDistance[0]) - uav_radius;
     return min(radius, double(max_radius));
 }
 
 void safeRegionRrtStarEllip::clearBranchW(NodePtr node_delete) // Weak branch cut: if a child of a node is on the current best path, keep the child
-{   // std::cout<<"clear branch seg1"<<std::endl;
+{   
+    std::cout<<"clear branch seg1"<<std::endl;
     if (!node_delete) {
         std::cerr << "[Error] Node to delete is null in clearBranchW()" << std::endl;
         return;
     }
-    // std::cout<<"clear branch seg2, nxt-ptr size: "<<node_delete->nxtNode_ptr.size()<<std::endl;
+    
+    std::cout<<"clear branch seg2, nxt-ptr size: "<<node_delete->nxtNode_ptr.size()<<std::endl;
     
     if (!node_delete->nxtNode_ptr.empty())
     {
         for (auto nodeptr : node_delete->nxtNode_ptr) 
         {
+            if (!nodeptr) {
+                std::cerr << "[Error] Null pointer in nxtNode_ptr in clearBranchW()" << std::endl;
+                continue;
+            }
+    
             if (!nodeptr->best) {
-                // std::cout<<"clear branch seg5"<<std::endl;
+                std::cout<<"clear branch seg5"<<std::endl;
                 if (nodeptr->valid) {
-                    // std::cout<<"clear branch seg6"<<std::endl;
+                    std::cout<<"clear branch seg6"<<std::endl;
                     invalidSet.push_back(nodeptr);
                 }
-                // std::cout<<"clear branch seg7"<<std::endl;
+                std::cout<<"clear branch seg7"<<std::endl;
                 nodeptr->valid = false;
                 clearBranchW(nodeptr);
             }
@@ -348,11 +382,13 @@ void safeRegionRrtStarEllip::removeInvalid()
     vector<NodePtr> deleteList;
     for(int i = 0; i < int(invalidSet.size()); i++ ){
         NodePtr nodeptr = invalidSet[i];
-
-        for(auto childptr: nodeptr->nxtNode_ptr) // let this node's children forget it
-        {   
-            if(childptr -> valid) 
-                childptr->preNode_ptr = NULL;
+        if(nodeptr)
+        {
+            for(auto childptr: nodeptr->nxtNode_ptr) // let this node's children forget it
+            {   
+                if(childptr -> valid) 
+                    childptr->preNode_ptr = NULL;
+            }
         }
 
         deleteList.push_back(nodeptr);
@@ -439,17 +475,18 @@ void safeRegionRrtStarEllip::resetRoot(Vector3d & target_coord)
         PathList[i]->valid = false;
         cutList.push_back(PathList[i]);
     }
-
+    std::cout<<"[segmentation error debug] 3"<<std::endl;
     // std::cout<<"[root debug] seg check 4"<<std::endl;
 
     solutionUpdate(cost_reduction, target_coord);
     // std::cout<<"[root debug] seg check 5"<<std::endl;
+    std::cout<<"[segmentation error debug] 4"<<std::endl;
 
     for(auto nodeptr:cutList){
         invalidSet.push_back(nodeptr);
         clearBranchW(nodeptr);
     }
-    // std::cout<<"[root debug] seg check 6"<<std::endl;
+    std::cout<<"[root debug] seg check 6"<<std::endl;
 
     removeInvalid();
 }

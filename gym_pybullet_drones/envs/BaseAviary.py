@@ -38,7 +38,8 @@ class BaseAviary(gym.Env):
                  user_debug_gui=True,
                  vision_attributes=False,
                  dynamics_attributes=False,
-                 output_folder='/home/astik/gym_pybullet_drones/results'
+                 output_folder='/home/astik/gym_pybullet_drones/results',
+                 environment_file = None
                  ):
         """Initialization of a generic aviary environment.
 
@@ -200,7 +201,7 @@ class BaseAviary(gym.Env):
                                                                     upAxisIndex=2,
                                                                     physicsClientId=self.CLIENT
                                                                     )
-                self.CAM_PRO = p.computeProjectionMatrixFOV(fov=60.0,
+                self.CAM_PRO = p.computeProjectionMatrixFOV(fov=90.0,
                                                             aspect=self.VID_WIDTH/self.VID_HEIGHT,
                                                             nearVal=0.1,
                                                             farVal=1000.0
@@ -605,7 +606,7 @@ class BaseAviary(gym.Env):
                                              cameraUpVector=[0, 0, 1],
                                              physicsClientId=self.CLIENT
                                              )
-        DRONE_CAM_PRO =  p.computeProjectionMatrixFOV(fov=60.0,
+        DRONE_CAM_PRO =  p.computeProjectionMatrixFOV(fov=90.0,
                                                       aspect=self.VID_WIDTH/self.VID_HEIGHT,
                                                       nearVal=self.L,
                                                       farVal=1000.0

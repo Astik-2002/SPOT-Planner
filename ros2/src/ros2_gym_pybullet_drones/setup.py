@@ -26,6 +26,7 @@ setup(
             'vision_client = ros2_gym_pybullet_drones.vision_wrapper_client:main',
             'waypoint_eg = ros2_gym_pybullet_drones.waypoint_eg:main',
             'pcd_to_csv = ros2_gym_pybullet_drones.pcd_to_csv:main',
+            'dep_to_csv = ros2_gym_pybullet_drones.dep_to_csv:main',
             'trajectory_tracker = ros2_gym_pybullet_drones.vision_trajectory_tracker:main',
             'trajectory_generator = ros2_gym_pybullet_drones.trajectory_eg:main',
             'noise_gen = ros2_gym_pybullet_drones.noise_gen:main',

@@ -28,7 +28,8 @@ class VisionAviary(BaseAviary):
                  record=False,
                  obstacles=False,
                  user_debug_gui=True,
-                 output_folder='results'
+                 output_folder='results',
+                 environment_file = None
                  ):
         """Initialization of an aviary environment for control applications using vision.
 
@@ -63,6 +64,9 @@ class VisionAviary(BaseAviary):
             Whether to draw the drones' axes and the GUI RPMs sliders.
 
         """
+
+        self.environment_file = environment_file
+
         super().__init__(drone_model=drone_model,
                          num_drones=num_drones,
                          neighbourhood_radius=neighbourhood_radius,
@@ -81,7 +85,7 @@ class VisionAviary(BaseAviary):
         self.VID_WIDTH=int(640)
         self.VID_HEIGHT=int(480)
         
-        self.projection_matrix = p.computeProjectionMatrixFOV(fov=60.0,
+        self.projection_matrix = p.computeProjectionMatrixFOV(fov=90.0,
                                                             aspect=self.VID_WIDTH/self.VID_HEIGHT,
                                                             nearVal=0.1,
                                                             farVal=1000.0
@@ -201,7 +205,7 @@ class VisionAviary(BaseAviary):
         
         height, width = depth_image.shape
         aspect = width/height
-        fov = 60    
+        fov = 90    
         
         fx = width / (2*np.tan(np.radians(fov / 2)))
         fy = height / (2*np.tan(np.radians(fov / 2)))
@@ -414,31 +418,33 @@ class VisionAviary(BaseAviary):
             #     else:
             #         print(f"File not found: {tree_urdf}")
             output_dir = "/home/astik/gym-pybullet-drones/gym_pybullet_drones/envs/obstacle_pos"
-            csv_file = os.path.join(output_dir, "environment_35.csv")
-            try:
-                with open(csv_file, newline="") as f:
-                    reader = csv.reader(f)
-                    # Skip header row if present
-                    next(reader, None)
-                    for row in reader:
-                        if len(row) < 4:
-                            continue
-                        tree_id = row[0]
-                        x_pos = float(row[1])
-                        y_pos = float(row[2])
-                        z_pos = float(row[3])
-                        pos = (x_pos, y_pos, z_pos)
-                        # print(f"Tree {tree_id} at position {pos}")
-                        if os.path.exists(tree_urdf):
-                            p.loadURDF(tree_urdf,
-                                    pos,
-                                    p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
-                                    useFixedBase=True,
-                                    physicsClientId=self.CLIENT)
-                        else:
-                            print(f"File not found: {tree_urdf}")
-            except Exception as e:
-                print(f"Error reading {csv_file}: {e}")
+            if self.environment_file:
+                csv_file = os.path.join(output_dir, self.environment_file)
+                try:
+                    with open(csv_file, newline="") as f:
+                        reader = csv.reader(f)
+                        # Skip header row if present
+                        next(reader, None)
+                        print("[vision aviary debug] loaded environment: ",csv_file)
+                        for row in reader:
+                            if len(row) < 4:
+                                continue
+                            tree_id = row[0]
+                            x_pos = float(row[1])
+                            y_pos = float(row[2])
+                            z_pos = float(row[3])
+                            pos = (x_pos, y_pos, z_pos)
+                            # print(f"Tree {tree_id} at position {pos}")
+                            if os.path.exists(tree_urdf):
+                                p.loadURDF(tree_urdf,
+                                        pos,
+                                        p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
+                                        useFixedBase=True,
+                                        physicsClientId=self.CLIENT)
+                            else:
+                                print(f"File not found: {tree_urdf}")
+                except Exception as e:
+                    print(f"Error reading {csv_file}: {e}")
         
         else:
             base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
