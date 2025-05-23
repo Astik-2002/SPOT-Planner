@@ -30,3 +30,9 @@ float64[] duration_vector                      # Duration for each segment
 
 # Debugging information
 string debug_info                   # Optional debug info (e.g., for warnings or issues)
+
+# Array of flattened matrices (as a single sequence of float64)
+float64[] matrix_polys             # Flattened sequence of matrix values corresponding to the corridors
+# Each plane is represented by a 4 numbers
+# values corresponding to each plane are concatenated. they are then parsed according to the value received in num_planes_poly which gives the number of planes in a polygon
+float64[] num_planes_poly        # number of planes in each polygon

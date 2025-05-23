@@ -61,7 +61,7 @@ class DepthNoiseNode(Node):
     def lateral_noise(self, z, fx=585):
         """ Vectorized lateral noise computation """
         # sigma_L = 0.0016
-        sigma_L = 0.04
+        sigma_L = 0.00
         noise_x = np.random.normal(0, sigma_L, z.shape)
         noise_y = np.random.normal(0, sigma_L, z.shape)
         return np.stack((noise_x, noise_y), axis=0)  # Shape (2, H, W)

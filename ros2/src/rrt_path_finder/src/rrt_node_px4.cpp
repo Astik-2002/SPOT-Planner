@@ -59,8 +59,8 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 1.5);
-        this->declare_parameter("uav_radius", 0.8);
+        this->declare_parameter("safety_margin", 0.8);
+        this->declare_parameter("uav_radius", 0.2);
         this->declare_parameter("search_margin", 0.0);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
@@ -227,8 +227,8 @@ private:
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
-    // safeRegionRrtStar _rrtPathPlanner;
-    safeRegionRrtStarEllip _rrtPathPlanner;
+    safeRegionRrtStar _rrtPathPlanner;
+    // safeRegionRrtStarEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     Trajectory<5> _traj;
     super_planner::CIRI_e ciri_e;
@@ -262,7 +262,7 @@ private:
     bool _is_target_receive = false;
     bool _is_has_map = false;
     bool _is_complete = false;
-    bool uncertanity_compensation = true;
+    bool uncertanity_compensation = false;
 
 
     // ROS 2-compatible callback functions
@@ -288,65 +288,6 @@ private:
         _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
         _rrtPathPlanner.reset();
     }
-
-    // void rcvOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
-    // {
-    //     _odom = *msg;
-    //     _start_pos[0] = _odom.pose.pose.position.x;
-    //     _start_pos[1] = _odom.pose.pose.position.y;
-    //     _start_pos[2] = _odom.pose.pose.position.z;
-
-    //     _start_vel[0] = _odom.twist.twist.linear.x;
-    //     _start_vel[1] = _odom.twist.twist.linear.y;
-    //     _start_vel[2] = _odom.twist.twist.linear.z;
-
-    //     tf2::Quaternion q(
-    //     _odom.pose.pose.orientation.x,
-    //     _odom.pose.pose.orientation.y,
-    //     _odom.pose.pose.orientation.z,
-    //     _odom.pose.pose.orientation.w
-    //     );
-
-    //     // Convert to Euler angles
-    //     double roll, pitch, yaw;
-    //     tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-
-    //     // Store the yaw angle
-    //     current_yaw = yaw; // Yaw in radians
-        
-    //     // odom_time = std::chrono::steady_clock::time_point(
-    //     //     std::chrono::seconds(_odom.header.stamp.sec) +
-    //     //     std::chrono::nanoseconds(_odom.header.stamp.nanosec)
-    //     // );
-    //     auto current_time = rclcpp::Time(_odom.header.stamp.sec, _odom.header.stamp.nanosec);
-    //     auto del_t = (current_time - odom_time).seconds();
-    //     _start_acc = (_start_vel - _last_vel)/(del_t);
-    //     odom_time = rclcpp::Time(_odom.header.stamp.sec, _odom.header.stamp.nanosec);
-    //     if(_rrtPathPlanner.getDis(_start_pos, _commit_target) < threshold)
-    //     {
-    //         // obsvstamp = std::chrono::steady_clock::now();
-    //         _is_target_arrive = true;
-    //     }
-    //     else
-    //     {
-    //         _is_target_arrive = false;
-
-    //         // std::cout<<"[commit debug] distance to endgoal: "<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
-    //     }
-    //     if(_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1.0)
-    //     {
-    //         _is_complete = true;   
-    //     }
-    //     checkSafeTrajectory();
-    //     std::cout<<"[odom callback] distance to commit target: "<<_rrtPathPlanner.getDis(_start_pos, _commit_target)<<std::endl;
-    //     // std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
-    //     // std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
-
-    //     // std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
-
-    //     // RCLCPP_WARN(this->get_logger(), "Received odometry: position(x: %.2f, y: %.2f, z: %.2f)",
-    //            // _odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose);
-    // }
 
     void rcvOdomCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
     {

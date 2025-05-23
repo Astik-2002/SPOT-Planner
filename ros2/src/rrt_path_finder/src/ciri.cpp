@@ -97,7 +97,8 @@ namespace super_planner {
 //        bool infeasible_problem{false};
         Vec3f infeasible_pt_w;
 
-        for (int loop = 0; loop < iter_num_; ++loop) {
+        for (int loop = 0; loop < iter_num_; ++loop) 
+        {
             // Initialize the boundary in ellipsoid frame
             const Eigen::Vector3d fwd_a = E.toEllipsoidFrame(a);
             const Eigen::Vector3d fwd_b = E.toEllipsoidFrame(b);
@@ -137,7 +138,7 @@ namespace super_planner {
                     const auto & pt_w = pc.col(pcMinId);
                     const auto dis = distancePointToSegment(pt_w,a,b);
                     if(dis < robot_r_ - 1e-2) {
-//                        infeasible_problem = true;
+                        // infeasible_problem = true;
                         infeasible_pt_w = pt_w;
                         cout<<YELLOW<<" -- [CIRI] WARNING! The problem is not feasible, the min dis to obstacle is only: "<<dis<<RESET<<endl;
                         return FAILED;
@@ -239,17 +240,17 @@ namespace super_planner {
             }
 
             if(hPoly.array().isNaN().any()) {
-                cout << YELLOW << " -- [CIRI] ERROR! maxVolInsEllipsoid failed." << RESET << endl;
-//                optimized_polytope_.Reset();
-//                optimized_polytope_.SetPlanes(hPoly);
-//                optimized_polytope_.SetSeedLine(std::make_pair(a, b));
-//                optimized_polytope_.SetEllipsoid(E);
-//                ros_ptr_->vizCiriSeedLine(a, b,robot_r_);
-//                cout<<" -- [CIRI] infeasible_pt_w: "<<infeasible_pt_w.transpose()<<endl;
-//                ros_ptr_->vizCiriInfeasiblePoint(infeasible_pt_w);
-//                ros_ptr_->vizCiriEllipsoid(E);
-////                optimized_polytope_.Visualize(debug_pub_, "optimized_polytope");
-//                std::cout << " -- [CIRI] hPoly: " << hPoly << std::endl;
+            //                 cout << YELLOW << " -- [CIRI] ERROR! maxVolInsEllipsoid failed." << RESET << endl;
+            //                 optimized_polytope_.Reset();
+            //                 optimized_polytope_.SetPlanes(hPoly);
+            //                 optimized_polytope_.SetSeedLine(std::make_pair(a, b));
+            //                 optimized_polytope_.SetEllipsoid(E);
+            //                 ros_ptr_->vizCiriSeedLine(a, b,robot_r_);
+            //                 cout<<" -- [CIRI] infeasible_pt_w: "<<infeasible_pt_w.transpose()<<endl;
+            //                 ros_ptr_->vizCiriInfeasiblePoint(infeasible_pt_w);
+            //                 ros_ptr_->vizCiriEllipsoid(E);
+            // //                optimized_polytope_.Visualize(debug_pub_, "optimized_polytope");
+            //                 std::cout << " -- [CIRI] hPoly: " << hPoly << std::endl;
                 return FAILED;
             }
 

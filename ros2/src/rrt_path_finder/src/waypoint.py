@@ -64,29 +64,41 @@ class DummyTFAndPathPublisher(Node):
         self.tf_broadcaster.sendTransform(t)
         self.get_logger().debug('Broadcasting corrected transform from "map" to "ground_link"')
 
-    def broadcast_transform(self, x,y,z,qx,qy,qz,qw, frame_name, parent_name):
-        # Assuming you have the drone's position and orientation as (x, y, z) and (qx, qy, qz, qw)
-        drone_position = [float(x), -float(y), -float(z)]  # Replace with actual drone position
-        drone_orientation = [float(qx), -float(qy), -float(qz), float(qw)]  # Replace with actual drone orientation
+    def broadcast_transform(self, x, y, z, qw, qx, qy, qz, frame_name, parent_name):
+        # Convert position from NED (PX4) to ENU (ROS):
+        # NED: +X (North), +Y (East), +Z (Down)
+        # ENU: +X (East), +Y (North), +Z (Up)
+        # So we convert:
+        #   x_enu = y_ned
+        #   y_enu = x_ned
+        #   z_enu = -z_ned
+        drone_position = [float(x), -float(y), -float(z)]
 
-        # Create the transform message
+        # Original PX4 quaternion: [qw, qx, qy, qz]
+        # Reformat to [x, y, z, w] for tf
+        q_ned = [float(qx), float(qy), float(qz), float(qw)]
+
+        # Convert rotation from NED to ENU frame:
+        # Apply 90° yaw + 180° roll rotation to map axes correctly
+        q_rot = tf_transformations.quaternion_from_euler(0, 0, 1.5708)  # roll=π, yaw=π/2
+
+        # Combined rotation: q_enu = q_rot * q_ned
+        q_nwu = tf_transformations.quaternion_multiply(q_rot, q_ned)
+        # Prepare the TransformStamped message
         t = TransformStamped()
-
-        # Set the timestamp and frame IDs
         t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = parent_name  # Global reference frame
-        t.child_frame_id = frame_name  # Frame representing the drone body
+        t.header.frame_id = parent_name
+        t.child_frame_id = frame_name
 
-        # Set the translation and rotation
         t.transform.translation.x = drone_position[0]
         t.transform.translation.y = drone_position[1]
         t.transform.translation.z = drone_position[2]
-        t.transform.rotation.x = drone_orientation[0]
-        t.transform.rotation.y = drone_orientation[1]
-        t.transform.rotation.z = drone_orientation[2]
-        t.transform.rotation.w = drone_orientation[3]
 
-        # Broadcast the transform
+        t.transform.rotation.x = q_nwu[0]
+        t.transform.rotation.y = q_nwu[1]
+        t.transform.rotation.z = q_nwu[2]
+        t.transform.rotation.w = q_nwu[3]
+
         self.tf_broadcaster.sendTransform(t)
 
     def publish_path(self):
@@ -99,8 +111,8 @@ class DummyTFAndPathPublisher(Node):
         pose = PoseStamped()
         pose.header.stamp = now
         pose.header.frame_id = 'ground_link'  # Change to ground_link
-        pose.pose.position.x = 0.0
-        pose.pose.position.y = -50.0
+        pose.pose.position.x = 50.0
+        pose.pose.position.y = 0.0
         pose.pose.position.z = 3.0
         pose.pose.orientation.x = 0.0
         pose.pose.orientation.y = 0.0

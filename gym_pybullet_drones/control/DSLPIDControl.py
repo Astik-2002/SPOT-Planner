@@ -36,15 +36,18 @@ class DSLPIDControl(BaseControl):
             print("[ERROR] in DSLPIDControl.__init__(), DSLPIDControl requires DroneModel.CF2X or DroneModel.CF2P")
             exit()
         
-        self.P_COEFF_VEL = np.array([1.0, 1.0, 0.0])
+        self.P_COEFF_VEL = np.array([0.12, 0.12, 0.115])
+        self.I_COEFF_VEL = np.array([0.0009, 0.0009, 0.0009])
+        self.D_COEFF_VEL = np.array([0.017, 0.017, 0.007])
+
         self.P_COEFF_FOR = np.array([.10, .10, 0.5])
         self.I_COEFF_FOR = np.array([.05, .05, .05])
+        self.D_COEFF_FOR = np.array([.25, .2, .7])
 
 
 
 
         
-        self.D_COEFF_FOR = np.array([.25, .2, .7])
         self.P_COEFF_TOR = np.array([70000., 70000., 60000.])
         self.I_COEFF_TOR = np.array([.0, .0, 500.])
         self.D_COEFF_TOR = np.array([20000., 20000., 12000.])
@@ -135,6 +138,72 @@ class DSLPIDControl(BaseControl):
                                                                          cur_quat,
                                                                          cur_vel,
                                                                          target_pos,
+                                                                         target_rpy,
+                                                                         target_vel
+                                                                         )
+        rpm = self._dslPIDAttitudeControl(control_timestep,
+                                          thrust,
+                                          cur_quat,
+                                          computed_target_rpy,
+                                          target_rpy_rates
+                                          )
+        cur_rpy = p.getEulerFromQuaternion(cur_quat)
+        return rpm, pos_e, computed_target_rpy[2] - cur_rpy[2]
+    
+
+    ################################################################################
+    
+    def computeControlVel(self,
+                       control_timestep,
+                       cur_pos,
+                       cur_quat,
+                       cur_vel,
+                       cur_ang_vel,
+                       target_rpy=np.zeros(3),
+                       target_vel=np.zeros(3),
+                       target_rpy_rates=np.zeros(3)
+                       ):
+        """Computes the PID control action (as RPMs) for a single drone.
+
+        This methods sequentially calls `_dslPIDPositionControl()` and `_dslPIDAttitudeControl()`.
+        Parameter `cur_ang_vel` is unused.
+
+        Parameters
+        ----------
+        control_timestep : float
+            The time step at which control is computed.
+        cur_pos : ndarray
+            (3,1)-shaped array of floats containing the current position.
+        cur_quat : ndarray
+            (4,1)-shaped array of floats containing the current orientation as a quaternion.
+        cur_vel : ndarray
+            (3,1)-shaped array of floats containing the current velocity.
+        cur_ang_vel : ndarray
+            (3,1)-shaped array of floats containing the current angular velocity.
+        target_pos : ndarray
+            (3,1)-shaped array of floats containing the desired position.
+        target_rpy : ndarray, optional
+            (3,1)-shaped array of floats containing the desired orientation as roll, pitch, yaw.
+        target_vel : ndarray, optional
+            (3,1)-shaped array of floats containing the desired velocity.
+        target_rpy_rates : ndarray, optional
+            (3,1)-shaped array of floats containing the desired roll, pitch, and yaw rates.
+
+        Returns
+        -------
+        ndarray
+            (4,1)-shaped array of integers containing the RPMs to apply to each of the 4 motors.
+        ndarray
+            (3,1)-shaped array of floats containing the current XYZ position error.
+        float
+            The current yaw error.
+
+        """
+        self.control_counter += 1
+        thrust, computed_target_rpy, pos_e = self._dslPIDVelocityControl(control_timestep,
+                                                                         cur_pos,
+                                                                         cur_quat,
+                                                                         cur_vel,
                                                                          target_rpy,
                                                                          target_vel
                                                                          )
@@ -266,9 +335,10 @@ class DSLPIDControl(BaseControl):
         self.integral_pos_e = np.clip(self.integral_pos_e, -2., 2.)
         self.integral_pos_e[2] = np.clip(self.integral_pos_e[2], -0.15, .15)
         #### PID target thrust #####################################
-        target_thrust = np.multiply(self.P_COEFF_FOR, pos_e) \
-                        + np.multiply(self.I_COEFF_FOR, self.integral_pos_e) \
-                        + np.multiply(self.D_COEFF_FOR, vel_e) + np.array([0, 0, self.GRAVITY])
+        target_thrust = np.multiply(self.P_COEFF_VEL, pos_e) \
+                        + np.multiply(self.I_COEFF_VEL, self.integral_pos_e) \
+                        + np.multiply(self.D_COEFF_VEL, vel_e) + np.array([0, 0, self.GRAVITY])
+        target_thrust[2] = np.clip(target_thrust[2], 0.5 * self.GRAVITY, 1.2 * self.GRAVITY)
         scalar_thrust = max(0., np.dot(target_thrust, cur_rotation[:,2]))
         thrust = (math.sqrt(scalar_thrust / (4*self.KF)) - self.PWM2RPM_CONST) / self.PWM2RPM_SCALE
         target_z_ax = target_thrust / np.linalg.norm(target_thrust)
@@ -281,6 +351,68 @@ class DSLPIDControl(BaseControl):
         if np.any(np.abs(target_euler) > math.pi):
             print("\n[ERROR] ctrl it", self.control_counter, "in Control._dslPIDPositionControl(), values outside range [-pi,pi]")
         return thrust, target_euler, pos_e
+    
+
+    ################################################################################
+
+    def _dslPIDVelocityControl(self,
+                               control_timestep,
+                               cur_pos,
+                               cur_quat,
+                               cur_vel,
+                               target_rpy,
+                               target_vel
+                               ):
+        """DSL's CF2.x PID position control.
+
+        Parameters
+        ----------
+        control_timestep : float
+            The time step at which control is computed.
+        cur_pos : ndarray
+            (3,1)-shaped array of floats containing the current position.
+        cur_quat : ndarray
+            (4,1)-shaped array of floats containing the current orientation as a quaternion.
+        cur_vel : ndarray
+            (3,1)-shaped array of floats containing the current velocity.
+        target_rpy : ndarray
+            (3,1)-shaped array of floats containing the desired orientation as roll, pitch, yaw.
+        target_vel : ndarray
+            (3,1)-shaped array of floats containing the desired velocity.
+
+        Returns
+        -------
+        float
+            The target thrust along the drone z-axis.
+        ndarray
+            (3,1)-shaped array of floats containing the target roll, pitch, and yaw.
+        float
+            The current position error.
+
+        """
+        cur_rotation = np.array(p.getMatrixFromQuaternion(cur_quat)).reshape(3, 3)
+        vel_e = target_vel - cur_vel  # ← Standard PID velocity error
+        acc = (cur_vel - self.prev_vel) / control_timestep
+        self.prev_vel = cur_vel.copy()
+        self.integral_pos_e = self.integral_pos_e + vel_e*control_timestep
+        self.integral_pos_e = np.clip(self.integral_pos_e, -2., 2.)
+        self.integral_pos_e[2] = np.clip(self.integral_pos_e[2], -0.15, .15)
+        #### PID target thrust #####################################
+        target_thrust = np.multiply(self.P_COEFF_VEL, vel_e) \
+                        + np.multiply(self.I_COEFF_VEL, self.integral_pos_e) \
+                        + np.multiply(self.D_COEFF_VEL, acc) + np.array([0, 0, self.GRAVITY])
+        scalar_thrust = max(0., np.dot(target_thrust, cur_rotation[:,2]))
+        thrust = (math.sqrt(scalar_thrust / (4*self.KF)) - self.PWM2RPM_CONST) / self.PWM2RPM_SCALE
+        target_z_ax = target_thrust / np.linalg.norm(target_thrust)
+        target_x_c = np.array([math.cos(target_rpy[2]), math.sin(target_rpy[2]), 0])
+        target_y_ax = np.cross(target_z_ax, target_x_c) / np.linalg.norm(np.cross(target_z_ax, target_x_c))
+        target_x_ax = np.cross(target_y_ax, target_z_ax)
+        target_rotation = (np.vstack([target_x_ax, target_y_ax, target_z_ax])).transpose()
+        #### Target rotation #######################################
+        target_euler = (Rotation.from_matrix(target_rotation)).as_euler('XYZ', degrees=False)
+        if np.any(np.abs(target_euler) > math.pi):
+            print("\n[ERROR] ctrl it", self.control_counter, "in Control._dslPIDVelocityControl(), values outside range [-pi,pi]")
+        return thrust, target_euler, vel_e
     
     ################################################################################
 

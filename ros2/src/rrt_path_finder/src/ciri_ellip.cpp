@@ -49,8 +49,10 @@ namespace super_planner {
         double sigma_x = std::min((0.001063 + 0.0007278 * x + 0.003949 * x * x)*sqrt(11.33), 0.6) + robot_r_;
 
         // Compute lateral noise (σx, σy)
-        double sigma_z = 0.04*sqrt(11.33) + robot_r_;
-        double sigma_y = 0.04*sqrt(11.33) + robot_r_;
+        // double k = 0.04;
+        double k = 0.0;
+        double sigma_z = k*sqrt(11.33) + robot_r_;
+        double sigma_y = k*sqrt(11.33) + robot_r_;
 
         return Eigen::Vector3d(sigma_x, sigma_y, sigma_z);
     }
@@ -202,7 +204,7 @@ namespace super_planner {
                     const auto & pt_w = pc.col(pcMinId);
                     auto E_pw = E_pw_vec[pcMinId];
                     // const auto dis = distancePointToSegment(pt_w,a,b);
-                    SeedAdjustment(E_pw, a, b);
+                    // SeedAdjustment(E_pw, a, b);
                     const auto Notvalid = EllipsoidExtentViolation(E_pw, a, b);
                     double uncertain_radius = 0;
                     if(Notvalid) {

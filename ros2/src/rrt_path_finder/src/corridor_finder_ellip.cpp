@@ -21,7 +21,8 @@ super_utils::Mat3f safeRegionRrtStarEllip::computeCovariance(const Eigen::Vector
     super_utils::Mat3f R_tf_inv = R_tf.inverse();
     Eigen::Vector3d point_cam = R_tf_inv * point;
     double x = point_cam[0], y = point_cam[1], z = point_cam[2];
-    double k1 = 0.04;
+    // double k1 = 0.04;
+    double k1 = 0.0;
     double sz = min(0.001063 + 0.0007278 * z + 0.003949 * z * z, 0.084);
     // double sz = 0.0012 + 0.0019*(z-0.4)*(z-0.4);
     // double k1 = 0.0016;

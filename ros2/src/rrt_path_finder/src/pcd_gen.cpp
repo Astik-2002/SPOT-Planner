@@ -14,7 +14,7 @@ public:
         // Declare and get parameters
         this->declare_parameter("L", 0.039700);  // Near clipping plane (meters)
         this->declare_parameter("farVal", 1000.0);  // Far clipping plane (meters)
-        this->declare_parameter("clip_distance", 8.0);  // Maximum valid distance (meters)
+        this->declare_parameter("clip_distance", 6.5);  // Maximum valid distance (meters)
 
         L_ = this->get_parameter("L").as_double();
         farVal_ = this->get_parameter("farVal").as_double();
@@ -39,7 +39,7 @@ public:
 
         // Subscribe to depth image topic
         depth_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "/depth_noisy", 10, std::bind(&DepthToPointCloud::depthCallback, this, std::placeholders::_1));
+            "/depth_image", 10, std::bind(&DepthToPointCloud::depthCallback, this, std::placeholders::_1));
 
         // Publish point cloud
         pcl_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("noisy_pcd_gym_pybullet", 10);

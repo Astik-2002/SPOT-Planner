@@ -228,8 +228,8 @@ private:
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
-    safeRegionRrtStar _rrtPathPlanner;
-    // safeRegionRrtStarEllip _rrtPathPlanner;
+    // safeRegionRrtStar _rrtPathPlanner;
+    safeRegionRrtStarEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     Trajectory<5> _traj;
     super_planner::CIRI_e ciri_e;
@@ -288,8 +288,8 @@ private:
     // Initializing rrt parameters
     void setRRTPlannerParams()
     {
-        // _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation, _uav_radius);
-        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
+        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation, _uav_radius);
+        // _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
 
         _rrtPathPlanner.reset();
     }

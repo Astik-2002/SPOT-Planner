@@ -46,7 +46,7 @@ DEFAULT_AGGREGATE = True
 DEFAULT_OBSTACLES = True
 DEFAULT_SIMULATION_FREQ_HZ = 240
 DEFAULT_CONTROL_FREQ_HZ = 48
-DEFAULT_DURATION_SEC = 12
+DEFAULT_DURATION_SEC = 100
 DEFAULT_OUTPUT_FOLDER = 'results'
 DEFAULT_COLAB = False
 
@@ -70,7 +70,7 @@ def run(
     #### Initialize the simulation #############################
     H = .1
     H_STEP = .05
-    R = .3
+    R = 1.0
     INIT_XYZS = np.array([[R*np.cos((i/6)*2*np.pi+np.pi/2), R*np.sin((i/6)*2*np.pi+np.pi/2)-R, H+i*H_STEP] for i in range(num_drones)])
     INIT_RPYS = np.array([[0, 0,  i * (np.pi/2)/num_drones] for i in range(num_drones)])
     AGGR_PHY_STEPS = int(simulation_freq_hz/control_freq_hz) if aggregate else 1
@@ -169,17 +169,23 @@ def run(
                 state_arr = np.array(obs[str(j)]["state"])
                 # Compute target position as before
                 target = np.hstack([TARGET_POS[wp_counters[j], 0:2], INIT_XYZS[j, 2]])
-                if num_drones == 1:
-                    # Compute yaw so that the drone faces the target position
-                    pos = state_arr[0:3]
-                    yaw = np.arctan2(target[1] - pos[1], target[0] - pos[0])
-                    target_rpy = [0, 0, yaw]
-                else:
-                    target_rpy = INIT_RPYS[j, :]
-                action[str(j)], _, _ = ctrl[j].computeControlFromState(
+                pos = state_arr[0:3]
+                yaw = np.arctan2(target[1] - pos[1], target[0] - pos[0])
+                target_rpy = [0, 0, yaw]
+                vel = 0.1*(target - pos)
+                state = obs[str(j)]["state"]
+                cur_pos=np.array(state[0:3]).flatten()
+                cur_quat=np.array(state[3:7]).flatten()
+                cur_vel=np.array(state[10:13]).flatten()
+                cur_ang_vel=np.array(state[13:16]).flatten()
+                
+                action[str(j)], _, _ = ctrl[j].computeControlVel(
                     control_timestep=CTRL_EVERY_N_STEPS * env.TIMESTEP,
-                    state=obs[str(j)]["state"],
-                    target_pos=target,
+                    cur_pos = cur_pos,
+                    cur_quat = cur_quat,
+                    cur_vel = cur_vel,
+                    cur_ang_vel=cur_ang_vel,
+                    target_vel=vel,
                     target_rpy=target_rpy
                 )
 

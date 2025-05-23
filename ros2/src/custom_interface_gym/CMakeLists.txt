@@ -17,7 +17,7 @@ find_package(geographic_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/UavControl.srv"  # Define your custom service file here
   "msg/TrajMsg.msg"
-  "msg/DesTrajectory.msg"         # Define your custom message file here
+  "msg/DesTrajectory.msg"
   DEPENDENCIES geometry_msgs std_msgs geographic_msgs  # Specify dependencies
 )
 

@@ -21,6 +21,8 @@ find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(cv_bridge)
+find_package(px4_msgs REQUIRED)
+
 
 # Manually specify the path to custom_interface_gym
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_INSTALL_PREFIX}/custom_interface_gym/share/custom_interface_gym/cmake)
@@ -150,6 +152,73 @@ ament_target_dependencies(trajectory_server_yaw
 
 # Ensure C++17 and C99 standards for trajectory_server (SAME AS rrt_node)
 target_compile_features(trajectory_server_yaw PUBLIC c_std_99 cxx_std_17)
+
+
+
+# Add source files for trajectory_server
+set(SOURCES_TRAJECTORY_SERVER
+  src/trajectory_server_px4.cpp
+)
+
+# Declare the executable for trajectory_server
+add_executable(trajectory_server_px4 ${SOURCES_TRAJECTORY_SERVER})
+
+# Link the PCL libraries for trajectory_server (SAME AS rrt_node)
+target_link_libraries(trajectory_server_px4 ${PCL_LIBRARIES})
+
+# Link dependencies for trajectory_server
+ament_target_dependencies(trajectory_server_px4
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+  px4_msgs
+)
+
+# Ensure C++17 and C99 standards for trajectory_server (SAME AS rrt_node)
+target_compile_features(trajectory_server_px4 PUBLIC c_std_99 cxx_std_17)
+
+
+
+
+# # Add source files for trajectory_server
+set(SOURCES_TRAJECTORY_SERVER_PX4_YAW
+  src/trajectory_server_px4_yaw.cpp
+  src/non_uniform_bspline.cpp
+
+)
+
+# Declare the executable for trajectory_server
+add_executable(trajectory_server_px4_yaw ${SOURCES_TRAJECTORY_SERVER_PX4_YAW})
+
+# Link the PCL libraries for trajectory_server (SAME AS rrt_node)
+target_link_libraries(trajectory_server_px4_yaw ${PCL_LIBRARIES})
+
+# Link dependencies for trajectory_server
+ament_target_dependencies(trajectory_server_px4_yaw
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+  px4_msgs
+)
+
+# Ensure C++17 and C99 standards for trajectory_server (SAME AS rrt_node)
+target_compile_features(trajectory_server_px4_yaw PUBLIC c_std_99 cxx_std_17)
 
 
 set(SOURCES_NEW_REPLAN
@@ -325,6 +394,105 @@ ament_target_dependencies(new_replan_normal
   custom_interface_gym
 )
 
+# Add source files for rrt_node
+set(SOURCES_RRT_NODE_PX4
+  src/corridor_finder.cpp
+  src/corridor_finder_ellip.cpp
+  src/kdtree.c
+  src/rrt_node_px4.cpp
+  src/ciri.cpp
+  src/ciri_ellip.cpp
+  src/ciri_sphere.cpp
+  src/utils/banded_system.cpp
+  src/utils/ellipsoid.cpp
+  src/utils/geometry_utils.cpp
+  src/utils/lbfgs.cpp
+  src/utils/mvie.cpp
+  src/utils/optimization_utils.cpp
+  src/utils/piece.cpp
+  src/utils/polynomial_interpolation.cpp
+  src/utils/polytope.cpp
+  src/utils/quickhull.cpp
+  src/utils/root_finder.cpp
+  src/utils/sdlp.cpp
+  src/utils/trajectory.cpp
+)
+
+# Declare the executable for rrt_node
+add_executable(rrt_node_px4 ${SOURCES_RRT_NODE_PX4})
+
+# Link dependencies for rrt_node
+ament_target_dependencies(rrt_node_px4
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+  px4_msgs
+)
+
+# Link the PCL libraries for rrt_node
+target_link_libraries(rrt_node_px4 ${PCL_LIBRARIES})
+
+# Ensure C++17 and C99 standards for rrt_node
+target_compile_features(rrt_node_px4 PUBLIC c_std_99 cxx_std_17)
+
+# Add source files for rrt_node
+set(SOURCES_RRT_NODE_PX4_YAW
+  src/corridor_finder.cpp
+  src/non_uniform_bspline.cpp
+  src/corridor_finder_ellip.cpp
+  src/kdtree.c
+  src/rrt_node_px4_yaw.cpp
+  src/ciri.cpp
+  src/ciri_ellip.cpp
+  src/ciri_sphere.cpp
+  src/utils/banded_system.cpp
+  src/utils/ellipsoid.cpp
+  src/utils/geometry_utils.cpp
+  src/utils/lbfgs.cpp
+  src/utils/mvie.cpp
+  src/utils/optimization_utils.cpp
+  src/utils/piece.cpp
+  src/utils/polynomial_interpolation.cpp
+  src/utils/polytope.cpp
+  src/utils/quickhull.cpp
+  src/utils/root_finder.cpp
+  src/utils/sdlp.cpp
+  src/utils/trajectory.cpp
+)
+
+# Declare the executable for rrt_node
+add_executable(rrt_node_px4_yaw ${SOURCES_RRT_NODE_PX4_YAW})
+
+# Link dependencies for rrt_node
+ament_target_dependencies(rrt_node_px4_yaw
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+  px4_msgs
+)
+
+# Link the PCL libraries for rrt_node
+target_link_libraries(rrt_node_px4_yaw ${PCL_LIBRARIES})
+
+# Ensure C++17 and C99 standards for rrt_node
+target_compile_features(rrt_node_px4_yaw PUBLIC c_std_99 cxx_std_17)
+
 set(SOURCES_PCD_MANIPULATION
   src/pcd_manipulation.cpp
 )
@@ -427,9 +595,36 @@ ament_target_dependencies(safe_node
 target_link_libraries(safe_node  ${PCL_LIBRARIES})
 
 
+# ----------------------------
+# Executable: pointcloud_transformer
+# ----------------------------
+# This executable corresponds to the C++ version of your point cloud transformer node.
+set(SOURCES_POINTCLOUD_TRANSFORMER
+  src/pointcloud_transformer.cpp
+)
+
+add_executable(pointcloud_transformer ${SOURCES_POINTCLOUD_TRANSFORMER})
+
+ament_target_dependencies(pointcloud_transformer
+  rclcpp
+  sensor_msgs
+  px4_msgs
+  nav_msgs
+  tf2_ros
+  pcl_conversions
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  tf2
+)
+
+target_link_libraries(pointcloud_transformer $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>)
+
+target_compile_features(pointcloud_transformer PUBLIC cxx_std_17)
+
+
 ############
 # Install targets
-install(TARGETS rrt_node trajectory_server trajectory_server_yaw new_replan safe_node pcd_manipulation new_replan_firi new_replan_normal new_replan_normal_yaw pcd_gen
+install(TARGETS rrt_node rrt_node_px4 rrt_node_px4_yaw trajectory_server_px4_yaw trajectory_server_px4 pointcloud_transformer trajectory_server trajectory_server_yaw new_replan safe_node pcd_manipulation new_replan_firi new_replan_normal new_replan_normal_yaw pcd_gen
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -778,32 +973,6 @@ ament_package()
 #   tf2_geometry_msgs
 #   custom_interface_gym
 # )
-
-
-# # ----------------------------
-# # Executable: pointcloud_transformer
-# # ----------------------------
-# # This executable corresponds to the C++ version of your point cloud transformer node.
-# set(SOURCES_POINTCLOUD_TRANSFORMER
-#   src/pointcloud_transformer.cpp
-# )
-
-# add_executable(pointcloud_transformer ${SOURCES_POINTCLOUD_TRANSFORMER})
-
-# ament_target_dependencies(pointcloud_transformer
-#   rclcpp
-#   sensor_msgs
-#   px4_msgs
-#   tf2_ros
-#   pcl_conversions
-#   tf2_sensor_msgs
-#   tf2_geometry_msgs
-#   tf2
-# )
-
-# target_link_libraries(pointcloud_transformer $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>)
-
-# target_compile_features(pointcloud_transformer PUBLIC cxx_std_17)
 
 # # ----------------------------
 # # Install targets and headers

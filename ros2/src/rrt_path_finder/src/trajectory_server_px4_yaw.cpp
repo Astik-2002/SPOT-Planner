@@ -19,6 +19,7 @@
 #include "rrt_path_finder/trajectory.hpp"
 #include "rrt_path_finder/geo_utils.hpp"
 #include "rrt_path_finder/quickhull.hpp"
+#include "rrt_path_finder/non_uniform_bspline.hpp"
 #include <Eigen/Eigen>
 #include <cmath>
 #include <algorithm>
@@ -27,96 +28,6 @@
 constexpr int D = 5;
 using namespace std::chrono_literals;
 
-// --- Cubic Spline Class for Yaw Interpolation ---
-// This implementation creates a natural cubic spline given time and yaw samples.
-class CubicSpline {
-public:
-    std::vector<double> x, a, b, c, d;
-
-    CubicSpline(const std::vector<double>& x_vals, const std::vector<double>& y_vals)
-        : x(x_vals), a(y_vals)
-    {
-        const int n = x.size();
-        b.resize(n);
-        c.resize(n);
-        d.resize(n - 1);
-
-        // Compute intervals h between consecutive time samples
-        std::vector<double> h(n - 1);
-        for (int i = 0; i < n - 1; ++i) {
-            h[i] = x[i + 1] - x[i];
-        }
-
-        // Set up the system to compute spline coefficients
-        std::vector<double> alpha(n, 0.0);
-        for (int i = 1; i < n - 1; ++i) {
-            alpha[i] = (3.0 / h[i]) * (a[i + 1] - a[i]) - (3.0 / h[i - 1]) * (a[i] - a[i - 1]);
-        }
-
-        std::vector<double> l(n, 1.0), mu(n, 0.0), z(n, 0.0);
-        for (int i = 1; i < n - 1; ++i) {
-            l[i] = 2.0 * (x[i + 1] - x[i - 1]) - h[i - 1] * mu[i - 1];
-            mu[i] = h[i] / l[i];
-            z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
-        }
-        c[n - 1] = 0.0;
-        for (int j = n - 2; j >= 0; --j) {
-            c[j] = z[j] - mu[j] * c[j + 1];
-            b[j] = (a[j + 1] - a[j]) / h[j] - h[j] * (c[j + 1] + 2.0 * c[j]) / 3.0;
-            d[j] = (c[j + 1] - c[j]) / (3.0 * h[j]);
-        }
-    }
-
-    // Evaluate the spline at time x_val
-    double evaluate(double x_val) const {
-        const int n = x.size();
-        int i = n - 2; // default to the last segment
-        for (int j = 0; j < n - 1; ++j) {
-            if (x_val < x[j + 1]) {
-                i = j;
-                break;
-            }
-        }
-        double dx = x_val - x[i];
-        return a[i] + b[i] * dx + c[i] * dx * dx + d[i] * dx * dx * dx;
-    }
-};
-
-// --- Yaw Planner ---
-// This function creates a smooth yaw trajectory using a cubic spline.
-// It extracts forward-looking positions from the polynomial trajectory
-// and computes the corresponding yaw (heading) at several sample points.
-// The polynomial trajectory (of type Trajectory<D>) provides:
-//    - double getTotalDuration() const;
-//    - Eigen::Vector3d getPos(double t) const;
-template <int D>
-CubicSpline createYawSpline(const Trajectory<D>& traj, int num_samples = 10) {
-    const double T = traj.getTotalDuration();
-    std::vector<double> sample_times;
-    std::vector<double> sample_yaws;
-
-    // Ensure a minimum of two samples for spline interpolation
-    num_samples = std::max(num_samples, 2);
-
-    for (int i = 0; i < num_samples; ++i) {
-        // Sample times evenly from 0 to final time T
-        double t = T * i / (num_samples - 1);
-        sample_times.push_back(t);
-
-        // Extract the current position from the polynomial trajectory
-        Eigen::Vector3d pos = traj.getPos(t);
-        // Use a small delta to estimate the forward direction
-        const double delta_t = 0.1;
-        Eigen::Vector3d pos_next = traj.getPos(std::min(t + delta_t, T));
-
-        // Compute yaw as the angle between consecutive positions (in ENU)
-        double yaw = std::atan2(pos_next.y() - pos.y(), pos_next.x() - pos.x());
-        sample_yaws.push_back(yaw);
-    }
-
-    // Return the yaw spline built from the sampled (time, yaw) pairs
-    return CubicSpline(sample_times, sample_yaws);
-}
 
 class OffboardControl : public rclcpp::Node
 {
@@ -156,7 +67,7 @@ private:
   std::vector<Eigen::Matrix<double, 3, 6>> current_coefficients;  // For each segment
   std::vector<double> segment_durations;
   Eigen::Vector3d current_pos{-2.0, 0.0, 1.5};
-  Eigen::Vector3d end_pos, yaw_target;
+  Eigen::Vector3d end_pos;
   bool _is_target_receive = false;
   bool _is_goal_arrive = false;
   bool _abort_hover_set = false;
@@ -168,24 +79,15 @@ private:
   bool has_trajectory;
   bool is_aborted;
   bool hover_command_sent = false;
+  bool _is_yaw_enabled = false;
+
   nav_msgs::msg::Odometry _odom;
   rclcpp::Time _final_time = rclcpp::Time(0);
   rclcpp::Time _start_time = rclcpp::Time::max();
+  double current_yaw = 0;
   Eigen::MatrixXd yaw_control_points;
-
-  double previous_yaw_ = 0.0; // Store the last yaw value
-  double dyaw_filtered_ = 0.5; // Filtered yaw rate
-  struct Parameters {
-      double dc = 0.1;                // Time step for yaw update
-      double w_max = 1.0;             // Maximum yaw rate
-      double alpha_filter_dyaw = 0.5; // Smoothing factor for dyaw
-  } par_;
-
-  bool face_yaw_goal = true; // Flag to determine yaw behavior
-
-  // Yaw spline pointer (built from the trajectory)
-  std::unique_ptr<CubicSpline> yaw_spline_;
-
+  NonUniformBspline yaw_traj;
+  double yaw_interval;
   // Publishers
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
@@ -279,8 +181,11 @@ private:
     marker.pose.position.z = current_pos_.z();
 
     // Convert orientation from NED to ENU
-    tf2::Quaternion q_ned(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
-    tf2::Quaternion q_enu = transformOrientationToENU(q_ned);
+    tf2::Quaternion q_ned(msg->q[1], msg->q[2], msg->q[3], msg->q[0]);
+    tf2::Quaternion q_enu(msg->q[1], -msg->q[2], -msg->q[3], msg->q[0]);
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q_enu).getRPY(roll, pitch, yaw);
+    current_yaw = yaw;
     marker.pose.orientation.x = q_ned.x();
     marker.pose.orientation.y = q_ned.y();
     marker.pose.orientation.z = q_ned.z();
@@ -295,15 +200,6 @@ private:
     marker.color.b = 0.0;
 
     marker_pub_->publish(marker);
-  }
-
-  tf2::Quaternion transformOrientationToENU(const tf2::Quaternion &q_ned)
-  {
-    tf2::Quaternion q_rotate;
-    q_rotate.setRPY(0, 0, 0);
-    tf2::Quaternion q_enu = q_rotate * q_ned;
-    q_enu.normalize();
-    return q_enu;
   }
 
   void offboardTimerCallback()
@@ -365,36 +261,36 @@ private:
     double distance_to_target = (current_pos_ - waypoints_).norm();
     if(distance_to_target < 1)
     {
-      std::cout << "Close to goal" << std::endl;
-      px4_msgs::msg::TrajectorySetpoint sp{};
-      sp.timestamp = this->now().nanoseconds() / 1000;
-      sp.position[0] = waypoints_[0];
-      sp.position[1] = -waypoints_[1];
-      sp.position[2] = -waypoints_[2];
+        std::cout << "Close to goal" << std::endl;
+        px4_msgs::msg::TrajectorySetpoint sp{};
+        sp.timestamp = this->now().nanoseconds() / 1000;
+        sp.position[0] = waypoints_[0];
+        sp.position[1] = -waypoints_[1];
+        sp.position[2] = -waypoints_[2];
 
-      sp.velocity[0] = std::numeric_limits<float>::quiet_NaN();
-      sp.velocity[1] = std::numeric_limits<float>::quiet_NaN();
-      sp.velocity[2] = std::numeric_limits<float>::quiet_NaN();
+        sp.velocity[0] = std::numeric_limits<float>::quiet_NaN();
+        sp.velocity[1] = std::numeric_limits<float>::quiet_NaN();
+        sp.velocity[2] = std::numeric_limits<float>::quiet_NaN();
 
-      sp.acceleration[0] = std::numeric_limits<float>::quiet_NaN();
-      sp.acceleration[1] = std::numeric_limits<float>::quiet_NaN();
-      sp.acceleration[2] = std::numeric_limits<float>::quiet_NaN();
-
-      std::cout << "Position : " << sp.position[0] << ' ' << sp.position[1] << ' ' << sp.position[2] << std::endl;
-      trajectory_setpoint_pub_->publish(sp);
-      return;
+        sp.acceleration[0] = std::numeric_limits<float>::quiet_NaN();
+        sp.acceleration[1] = std::numeric_limits<float>::quiet_NaN();
+        sp.acceleration[2] = std::numeric_limits<float>::quiet_NaN();
+        double yaw_des = 0.0;
+        if(_is_yaw_enabled)
+        {
+            Eigen::VectorXd yaw_vec = yaw_traj.evaluateDeBoorT(elapsed);
+            yaw_des = yaw_vec(0);
+        }
+        sp.yaw = yaw_des; // wrapAngle(yaw_ned);
+        std::cout<<"current yaw: "<<current_yaw<<" desired yaw: "<<sp.yaw<<std::endl;
+        std::cout << "Position : " << sp.position[0] << ' ' << sp.position[1] << ' ' << sp.position[2] << std::endl;
+        trajectory_setpoint_pub_->publish(sp);
+        return;
     }
-
-    // Use the yaw planner: evaluate the yaw spline at the elapsed time (in ENU)
-    double desired_yaw_enu = 0.0;
-    // if (yaw_spline_) {
-    //   std::cout << "yaw spline is being used"<< std::endl;
-    //     desired_yaw_enu = yaw_spline_->evaluate(elapsed);
-    // } else {
-        // desired_yaw_enu = std::atan2(des_vel.y(), des_vel.x());
-    // }
-    // Convert ENU yaw to NED yaw by subtracting pi/2
-    publishSetpoint(des_pos, des_vel, des_Acc);
+    Eigen::VectorXd yaw_vec = yaw_traj.evaluateDeBoorT(elapsed);
+    double des_yaw = yaw_vec(0);
+    
+    publishSetpoint(des_pos, des_vel, des_Acc, des_yaw);
   }
 
   void handleAddTrajectory(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
@@ -413,6 +309,7 @@ private:
       _final_time = _start_time;
       segment_durations.clear();
       current_coefficients.clear();
+      yaw_control_points.resize(0, 0);
       segment_durations = msg->duration_vector;
       num_segments = msg->num_segment;
       order = msg->num_order;
@@ -430,57 +327,25 @@ private:
       }
       _traj.setParameters(segment_durations, current_coefficients);
 
-      // Build the yaw spline using the current polynomial trajectory.
-      yaw_spline_ = std::make_unique<CubicSpline>(createYawSpline(_traj, 10));
+      if(msg->yaw_enabled == custom_interface_gym::msg::DesTrajectory::YAW_ENABLED_TRUE)
+        {
+            std::cout<<"[add callback debug] yaw reference received: "<<std::endl;
+            _is_yaw_enabled = true;
+            yaw_control_points = Eigen::MatrixXd::Zero(msg->yaw_control_points.size(), 1);
 
-      // Publish yaw markers for the entire trajectory.
-      publishYawMarkers();
+            for(int i = 0; i<msg->yaw_control_points.size(); i++)
+            {
+                yaw_control_points(i,0) = msg->yaw_control_points[i];
+            }
+            yaw_interval = msg->yaw_interval;
+            yaw_traj.setUniformBspline(yaw_control_points, 1, yaw_interval);
+        }
+        std::cout<<"in handle add trajectory callback, traj set successfully"<<std::endl;
   }
 
-  // This function publishes a set of markers (arrows) that indicate the yaw from the spline
-  // at evenly sampled times along the entire trajectory.
-  void publishYawMarkers()
-  {
-    if (!yaw_spline_) return;
-    int num_samples = 50;
-    double T = _traj.getTotalDuration();
-    for (int i = 0; i < num_samples; ++i) {
-        double t = T * i / (num_samples - 1);
-        Eigen::Vector3d pos = _traj.getPos(t);
-        double yaw = yaw_spline_->evaluate(t);
-
-        visualization_msgs::msg::Marker marker;
-        marker.header.frame_id = "map";
-        marker.header.stamp = this->now();
-        marker.ns = "yaw_spline";
-        marker.id = i;
-        marker.type = visualization_msgs::msg::Marker::ARROW;
-        marker.action = visualization_msgs::msg::Marker::ADD;
-        marker.pose.position.x = pos.x();
-        marker.pose.position.y = pos.y();
-        marker.pose.position.z = pos.z();
-
-        tf2::Quaternion q;
-        q.setRPY(0, 0, yaw);  // roll=0, pitch=0, yaw from spline (ENU)
-        marker.pose.orientation.x = q.x();
-        marker.pose.orientation.y = q.y();
-        marker.pose.orientation.z = q.z();
-        marker.pose.orientation.w = q.w();
-
-        marker.scale.x = 0.5; // Arrow length
-        marker.scale.y = 0.1; // Arrow width
-        marker.scale.z = 0.1; // Arrow height
-        marker.color.a = 1.0;
-        marker.color.r = 0.0;
-        marker.color.g = 0.0;
-        marker.color.b = 1.0; // Blue color for yaw markers
-
-        marker_pub_->publish(marker);
-    }
-  }
-
+  
   void publishSetpoint(const Eigen::Vector3d& pos_enu, const Eigen::Vector3d& vel_enu,
-                         const Eigen::Vector3d& acc_enu)
+                         const Eigen::Vector3d& acc_enu, const double &yaw_des)
   {
     px4_msgs::msg::TrajectorySetpoint sp{};
     sp.timestamp = this->now().nanoseconds() / 1000;
@@ -498,10 +363,8 @@ private:
     sp.acceleration[1] = -acc_enu.y(); // East acceleration
     sp.acceleration[2] = -acc_enu.z(); // Down acceleration
     Eigen::Vector3d des_pos_NED{sp.position[0], sp.position[1], sp.position[2]};
-    auto diff_pos = waypoints_NED-des_pos_NED;
-    double yaw_ned = std::atan2(diff_pos.y(),diff_pos.x());
-    sp.yaw = 3.14/2; // wrapAngle(yaw_ned);
-    // sp.yaw = yaw_ned;
+    sp.yaw = -yaw_des; // wrapAngle(yaw_ned);
+    std::cout<<"current yaw: "<<current_yaw<<" desired yaw: "<<sp.yaw<<std::endl;
     trajectory_setpoint_pub_->publish(sp);
   }
 
