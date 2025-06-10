@@ -36,6 +36,7 @@ from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 from custom_interface_gym.msg import TrajMsg
+from custom_interface_gym.msg import BoundingBoxArray, DynamicBbox
 import csv, math
 
 
@@ -54,7 +55,7 @@ class AviaryWrapper(Node):
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
         self.goal_pos = np.array([[50.0, 0.0, 1.5]]).flatten()
-
+        self.is_dyn = True
         self.env = VisionAviary(drone_model=DroneModel.CF2X,
                            num_drones=1,
                            initial_xyzs=self.INIT_XYZS,
@@ -67,7 +68,8 @@ class AviaryWrapper(Node):
                            record=False,
                            obstacles=True,
                            user_debug_gui=False,
-                           environment_file="environment_41.csv"
+                           environment_file="environment_41.csv",
+                           dynamic_obs=self.is_dyn
                            )
         #### Initialize an action with the RPMs at hover ###########
         self.action = np.ones(4)*self.env.HOVER_RPM
@@ -82,6 +84,7 @@ class AviaryWrapper(Node):
         self.rgb_pub = self.create_publisher(Image,'rgb_image',1)
         self.goal_pub = self.create_publisher(Path,'waypoints',1)
         self.seg_pub = self.create_publisher(Image,'segmentation_image',1)
+        self.dyn_obs_pub = self.create_publisher(BoundingBoxArray, 'dynamic_obs_state', 1)
         self.log_set = False
         self.bridge = CvBridge()
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -113,6 +116,7 @@ class AviaryWrapper(Node):
         self.des_pos = self.INIT_XYZS.flatten()
         self.hover_pos = self.INIT_XYZS.flatten()
         self.des_vel = np.zeros(3)
+        self.dynamic_obstacles = []
 
     
     def publish_trajectory(self):
@@ -217,51 +221,12 @@ class AviaryWrapper(Node):
 
 
         self.publisher_.publish(msg)
+        if self.is_dyn:
+            self.publish_dynamic_states()
         depth_image = obs["0"]["dep"]
         rgb_image = obs["0"]["rgb"]
         seg_image = obs["0"]["seg"]
-        # depth_image = self.add_depth_noise(depth_image)
-        # pcd = self.env._pcd_generation(depth_image)
-        # points = np.asarray(pcd.points)
-        # points_noisy = self.generate_noise(points)
-        # points = self.env._pcd_generation_opencv(depth_image)
-        # Create header
-        # header = Header()
-        # header.stamp = self.get_clock().now().to_msg()
-        # header.frame_id = "base_link"
-
-        # # Define fields for PointCloud2
-        # fields = [
-        #     PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-        #     PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-        #     PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
-        # ]   
-
-        # # Create PointCloud2 message
-        # pointcloud_msg = pc2.create_cloud(header, fields, points)
-
-
-        # header_noisy = Header()
-        # header_noisy.stamp = self.get_clock().now().to_msg()
-        # header_noisy.frame_id = "base_link"
-
-        # # Define fields for PointCloud2
-        # fields_noisy = [
-        #     PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-        #     PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-        #     PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
-        # ]   
-
-        # # Create PointCloud2 message
-        # noisy_pointcloud_msg = pc2.create_cloud(header_noisy, fields_noisy, points_noisy)
-
-        # # Publish the PointCloud2 message
-        # self.noisy_pcd_pub.publish(noisy_pointcloud_msg)
         
-        # self.pcd_pub.publish(pointcloud_msg)
-
-
-    #    seg_image = obs["0"]["seg"]
         if depth_image.dtype != np.float32:
             depth_image = depth_image.astype(np.float32)
 
@@ -305,6 +270,34 @@ class AviaryWrapper(Node):
         goal_pose.pose.position.z = self.goal_pos[2]
         goal.poses.append(goal_pose)
         self.goal_pub.publish(goal)
+
+    def publish_dynamic_states(self):
+        self.dynamic_obstacles = self.env.dynamic_obstacles
+        bbox_arr = BoundingBoxArray()
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = "map"
+
+        for obs in self.dynamic_obstacles:
+            bbox = DynamicBbox()
+            pos = obs["pos"]
+            vel = obs["velocity"]
+            bbox.center_x = pos[0]
+            bbox.center_y = pos[1]
+            bbox.center_z = 0.5
+
+            bbox.velocity_x = vel[0]
+            bbox.velocity_y = vel[1]
+            bbox.velocity_z = vel[2]
+
+            bbox.height = 1.0
+            bbox.width = 0.2
+            bbox.length = 0.2
+
+            bbox_arr.boxes.append(bbox)
+        
+        bbox_arr.header = header
+        self.dyn_obs_pub.publish(bbox_arr)
 
     def generate_noise(self, points_pcd):
         s_y = 0.04

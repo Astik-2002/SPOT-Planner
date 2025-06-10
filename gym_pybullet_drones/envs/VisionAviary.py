@@ -29,7 +29,8 @@ class VisionAviary(BaseAviary):
                  obstacles=False,
                  user_debug_gui=True,
                  output_folder='results',
-                 environment_file = None
+                 environment_file = None,
+                 dynamic_obs = False,
                  ):
         """Initialization of an aviary environment for control applications using vision.
 
@@ -66,7 +67,11 @@ class VisionAviary(BaseAviary):
         """
 
         self.environment_file = environment_file
-
+        self.is_dyn = dynamic_obs
+        self.obs = obstacles
+        self.dynamic_obstacles = []
+        self.near = 0.1
+        self.far = 1000
         super().__init__(drone_model=drone_model,
                          num_drones=num_drones,
                          neighbourhood_radius=neighbourhood_radius,
@@ -90,10 +95,6 @@ class VisionAviary(BaseAviary):
                                                             nearVal=0.1,
                                                             farVal=1000.0
                                                             )
-        self.obs = obstacles
-        self.dynamic_obstacles = []
-        self.near = 0.1
-        self.far = 1000
 
     
     ################################################################################
@@ -370,8 +371,8 @@ class VisionAviary(BaseAviary):
     def step(self,
              action):
         """Overrides the step method to include dynamic obstacle updates."""
-        # if self.obs:
-        #     self._updateDynamicObstacles()  # Update dynamic obstacle positions
+        if self.is_dyn:
+            self._updateDynamicObstacles()  # Update dynamic obstacle positions
         return super().step(action)
 
     ################################################################################
@@ -390,6 +391,8 @@ class VisionAviary(BaseAviary):
         """
         # Call the parent class _addObstacles (if needed)
         # super()._addObstacles()
+        if self.is_dyn:
+            self._addDynamicObstacles(num_obstacles=10)
         less = False
         if not less:
             num_trees= 80
@@ -466,15 +469,16 @@ class VisionAviary(BaseAviary):
         obstacle_urdf = os.path.join(base_path, "red_cylinder.urdf")
         for _ in range(num_obstacles):
             # Generate random initial positions within bounds
-            x_pos = 3
-            y_pos = 0.0
+            
+            x_pos = np.random.uniform(x_bounds[0], x_bounds[1])
+            y_pos = np.random.uniform(y_bounds[0], y_bounds[1])
             z_pos = 0.5  # Fixed height for the obstacles
             pos = (x_pos, y_pos, z_pos)
 
             # Generate random velocity components
             velocity = [
-                1.5,
-                0.0,
+                np.random.uniform(velocity_range[0], velocity_range[1]),
+                np.random.uniform(velocity_range[0], velocity_range[1]),
                 0.0  # Obstacles move in the XY plane only
             ]
 
@@ -485,6 +489,7 @@ class VisionAviary(BaseAviary):
                                          useFixedBase=False,
                                          physicsClientId=self.CLIENT)
                 self.dynamic_obstacles.append({
+                    "pos": pos,
                     "id": obstacle_id,
                     "velocity": velocity
                 })
@@ -503,12 +508,19 @@ class VisionAviary(BaseAviary):
             new_pos = [pos[0] + velocity[0] / self.SIM_FREQ,
                        pos[1] + velocity[1] / self.SIM_FREQ,
                        pos[2] + velocity[2] / self.SIM_FREQ]
-            print("obstacle id: ", obstacle_id, " position: ",new_pos)
+            if new_pos[0] < 0 or new_pos[0] > 50:
+                obstacle["velocity"][0] = -velocity[0]
+                new_pos[0] = pos[0] + obstacle["velocity"][0] / self.SIM_FREQ
+            if new_pos[1] < -25 or new_pos[1] > 25:
+                obstacle["velocity"][1] = -velocity[1]
+                new_pos[1] = pos[1] + obstacle["velocity"][1] / self.SIM_FREQ
+            # print("obstacle id: ", obstacle_id, " position: ",new_pos)
             # Set the new position of the obstacle
             p.resetBasePositionAndOrientation(obstacle_id,
                                               new_pos,
                                               p.getQuaternionFromEuler([0, 0, 0]),
                                               physicsClientId=self.CLIENT)
+            obstacle["pos"] = new_pos
 
     # def _addObstacles(self):
     #     """Add obstacles to the environment, including multiple cylinders of different colors at fixed positions."""

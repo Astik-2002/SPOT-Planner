@@ -544,6 +544,31 @@ ament_target_dependencies(pcd_gen
 
 target_compile_features(pcd_gen PUBLIC c_std_99 cxx_std_17)
 
+set(SOURCES_PCD_SEGMENTATION
+  src/pcd_segmentation.cpp
+)
+
+# Declare the executable for rrt_node_new_replan
+add_executable(pcd_segmentation ${SOURCES_PCD_SEGMENTATION})
+
+# Link dependencies for new_replan
+ament_target_dependencies(pcd_segmentation
+  rclcpp
+  nav_msgs
+  sensor_msgs
+  visualization_msgs
+  pcl_conversions
+  PCL
+  tf2_ros
+  cv_bridge
+  tf2_sensor_msgs
+  tf2_geometry_msgs
+  std_msgs
+  custom_interface_gym
+)
+
+target_compile_features(pcd_segmentation PUBLIC c_std_99 cxx_std_17)
+
 
 ############
 
