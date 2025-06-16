@@ -16,7 +16,7 @@ public:
         // Declare and get parameters
         this->declare_parameter("L", 0.039700);  // Near clipping plane (meters)
         this->declare_parameter("farVal", 1000.0);  // Far clipping plane (meters)
-        this->declare_parameter("clip_distance", 6.5);  // Maximum valid distance (meters)
+        this->declare_parameter("clip_distance", 50.0);  // Maximum valid distance (meters)
 
         L_ = this->get_parameter("L").as_double();
         farVal_ = this->get_parameter("farVal").as_double();
@@ -69,12 +69,18 @@ private:
         pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>());
 
         // Compute focal length dynamically based on FOV
+        // double aspect = static_cast<double>(width) / height;
+        // double fov_rad = 90.0 * M_PI / 180.0;
+        // double fx = (width / 2.0) / std::tan(fov_rad / 2.0);
+        // double fy = (height / 2.0) / std::tan(fov_rad / 2.0);
+        // double cx = width / 2.0;
+        // double cy = height / 2.0;
         double aspect = static_cast<double>(width) / height;
-        double fov = 90.0;
-        double fx = width / (2.0 * std::tan(3.14/180*fov/2));
-        double fy = height / (2.0 * std::tan(3.14/180*fov/2));
-        double cx = width / 2.0;
-        double cy = height / 2.0;
+        double fov_y_rad = 90.0 * M_PI / 180.0;          // vertical FOV from PyBullet
+        double fy = (height * 0.5) / std::tan(fov_y_rad * 0.5);
+        double fx = fy * aspect;                         // horizontal
+        double cx = (width - 1) * 0.5;
+        double cy = (height - 1) * 0.5;
 
         // Process depth image into a 3D point cloud
         for (int v = 0; v < height; ++v) {
@@ -83,9 +89,9 @@ private:
                 if (depth_image <= 0.0) continue;  // Skip invalid depth
         
                 // Convert normalized depth to real depth (mm)
-                double depth_mm = (2.0 * L_ * farVal_) / 
-                                  (farVal_ + L_ - depth_image * (farVal_ - L_));
-        
+                
+                double depth_mm = (2.0 * L_ * farVal_) /
+                    (farVal_ + L_ - (2.0 * depth_image - 1.0) * (farVal_ - L_)); 
                 double Z = depth_mm;
                 double X = (u - cx) * Z / fx;
                 double Y = (v - cy) * Z / fy;
@@ -136,13 +142,13 @@ private:
         sensor_msgs::msg::PointCloud2 cloud_msg;
         pcl::toROSMsg(*cloud, cloud_msg);
         cloud_msg.header = msg->header;
-        cloud_msg.header.frame_id = "base_link";  // Adjust frame if necessary
+        cloud_msg.header.frame_id = "camera_link";  // Adjust frame if necessary
         pcl_pub_->publish(cloud_msg);
 
         sensor_msgs::msg::PointCloud2 dynamic_cloud_msg;
         pcl::toROSMsg(*dynamic_cloud, dynamic_cloud_msg);
         dynamic_cloud_msg.header = msg->header;
-        dynamic_cloud_msg.header.frame_id = "base_link";  // Adjust frame if necessary
+        dynamic_cloud_msg.header.frame_id = "camera_link";  // Adjust frame if necessary
         dynamic_pcl_pub_->publish(dynamic_cloud_msg);
     }
 

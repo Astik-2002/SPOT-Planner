@@ -62,11 +62,11 @@ private:
 
         // Compute focal length dynamically based on FOV
         double aspect = static_cast<double>(width) / height;
-        double fov = 90.0;
-        double fx = width / (2.0 * std::tan(3.14/180*fov/2));
-        double fy = height / (2.0 * std::tan(3.14/180*fov/2));
-        double cx = width / 2.0;
-        double cy = height / 2.0;
+        double fov_y_rad = 90.0 * M_PI / 180.0;          // vertical FOV from PyBullet
+        double fy = (height * 0.5) / std::tan(fov_y_rad * 0.5);
+        double fx = fy * aspect;                         // horizontal
+        double cx = (width - 1) * 0.5;
+        double cy = (height - 1) * 0.5;
 
         // Process depth image into a 3D point cloud
         for (int v = 0; v < height; ++v) {
@@ -76,7 +76,7 @@ private:
         
                 // Convert normalized depth to real depth (mm)
                 double depth_mm = (2.0 * L_ * farVal_) / 
-                                  (farVal_ + L_ - depth_image * (farVal_ - L_));
+                                  (farVal_ + L_ - (2.0 * depth_image - 1.0) * (farVal_ - L_));
         
                 double Z = depth_mm;
                 double X = (u - cx) * Z / fx;
