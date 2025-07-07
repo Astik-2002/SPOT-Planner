@@ -1049,10 +1049,10 @@ private:
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
             // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-            convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+            // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
             // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
-            // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+            convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -1088,6 +1088,7 @@ private:
 
     void planIncrementalTraj()
     {
+        std::cout<<"[debug] in incremental planner: "<<std::endl;
         if (_rrtPathPlanner.getGlobalNaviStatus())
         {
             RCLCPP_WARN(this->get_logger(), "Almost reached final goal");
@@ -1119,10 +1120,10 @@ private:
                 auto t1 = std::chrono::steady_clock::now();
 
                 // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-                convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+                // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
                 // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 // polygon_dilation(hpolys);
-                // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+                convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 
                 shortCut();
                 auto t2 = std::chrono::steady_clock::now();

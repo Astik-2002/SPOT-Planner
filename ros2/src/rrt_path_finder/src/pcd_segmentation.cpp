@@ -16,7 +16,7 @@ public:
         // Declare and get parameters
         this->declare_parameter("L", 0.039700);  // Near clipping plane (meters)
         this->declare_parameter("farVal", 1000.0);  // Far clipping plane (meters)
-        this->declare_parameter("clip_distance", 50.0);  // Maximum valid distance (meters)
+        this->declare_parameter("clip_distance", 30.0);  // Maximum valid distance (meters)
 
         L_ = this->get_parameter("L").as_double();
         farVal_ = this->get_parameter("farVal").as_double();
@@ -68,41 +68,37 @@ private:
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>());
 
-        // Compute focal length dynamically based on FOV
-        // double aspect = static_cast<double>(width) / height;
-        // double fov_rad = 90.0 * M_PI / 180.0;
-        // double fx = (width / 2.0) / std::tan(fov_rad / 2.0);
-        // double fy = (height / 2.0) / std::tan(fov_rad / 2.0);
-        // double cx = width / 2.0;
-        // double cy = height / 2.0;
         double aspect = static_cast<double>(width) / height;
-        double fov_y_rad = 90.0 * M_PI / 180.0;          // vertical FOV from PyBullet
+        double fov_y_rad = 90.0 * M_PI / 180.0;
         double fy = (height * 0.5) / std::tan(fov_y_rad * 0.5);
-        double fx = fy * aspect;                         // horizontal
-        double cx = (width - 1) * 0.5;
-        double cy = (height - 1) * 0.5;
+
+        // fx computed from horizontal FOV
+        double fov_x_rad = 2.0 * std::atan(std::tan(fov_y_rad / 2.0) * aspect);
+        double fx = (width * 0.5) / std::tan(fov_x_rad * 0.5);                    // horizontal
+        double cx = (width) * 0.5;
+        double cy = (height) * 0.5;
 
         // Process depth image into a 3D point cloud
         for (int v = 0; v < height; ++v) {
-            for (int u = 0; u < width; ++u) {
+            for (int u = 0; u < width; ++u) 
+            {
                 float depth_image = cv_ptr->image.at<float>(v, u);
                 if (depth_image <= 0.0) continue;  // Skip invalid depth
         
-                // Convert normalized depth to real depth (mm)
+                // Convert normalized depth to real depth (m)
                 
-                double depth_mm = (2.0 * L_ * farVal_) /
+                double depth_m = (2.0 * L_ * farVal_) /
                     (farVal_ + L_ - (2.0 * depth_image - 1.0) * (farVal_ - L_)); 
-                double Z = depth_mm;
+                double Z = depth_m;
                 double X = (u - cx) * Z / fx;
                 double Y = (v - cy) * Z / fy;
         
                 Eigen::Vector4d point_h(X, Y, Z, 1.0);
                 Eigen::Vector4d transformed_point = drone_transform_ * point_h;
         
-                double dist = transformed_point.head<3>().norm();  // Euclidean distance
         
                 // Apply clipping (skip points beyond clip_distance_)
-                if (Z < 0 || dist > clip_distance_) continue;
+                if (Z < 0 || Z > clip_distance_) continue;
         
                 // Add valid points to the point cloud
                 pcl::PointXYZ point;
@@ -110,46 +106,18 @@ private:
                 point.y = static_cast<float>(transformed_point(1));
                 point.z = static_cast<float>(transformed_point(2));
 
-                bool in_bbox = false;
-                for (const auto& bbox : dynamic_obs_array) {
-                    // bbox.row(0): centroid (center_x, center_y, center_z)
-                    // bbox.row(2): dimensions (height, length, width)
-                    double cx_box = bbox(0, 0);
-                    double cy_box = bbox(0, 1);
-                    double cz_box = bbox(0, 2);
-                    // Assuming the dimensions represent full extents; use half sizes for boundary checks
-                    double half_height = bbox(2, 0) / 2.0;
-                    double half_length = bbox(2, 1) / 2.0;
-                    double half_width  = bbox(2, 2) / 2.0;
-
-                    if (point.x >= cx_box - half_length && point.x <= cx_box + half_length &&
-                        point.y >= cy_box - half_width  && point.y <= cy_box + half_width &&
-                        point.z >= cz_box - half_height && point.z <= cz_box + half_height) {
-                        in_bbox = true;
-                        break;
-                    }
-                }
-
-                if (in_bbox) {
-                    dynamic_cloud->push_back(point);
-                } else {
-                    cloud->push_back(point);
-                }
+                
+                cloud->push_back(point);
             }
         }
 
         // Convert and publish point cloud
         sensor_msgs::msg::PointCloud2 cloud_msg;
+        // RCLCPP_INFO(this->get_logger(), "Static cloud size: %zu, Dynamic cloud size: %zu", cloud->size(), dynamic_cloud->size());
         pcl::toROSMsg(*cloud, cloud_msg);
         cloud_msg.header = msg->header;
         cloud_msg.header.frame_id = "camera_link";  // Adjust frame if necessary
         pcl_pub_->publish(cloud_msg);
-
-        sensor_msgs::msg::PointCloud2 dynamic_cloud_msg;
-        pcl::toROSMsg(*dynamic_cloud, dynamic_cloud_msg);
-        dynamic_cloud_msg.header = msg->header;
-        dynamic_cloud_msg.header.frame_id = "camera_link";  // Adjust frame if necessary
-        dynamic_pcl_pub_->publish(dynamic_cloud_msg);
     }
 
     void bboxCallback(const custom_interface_gym::msg::BoundingBoxArray::SharedPtr msg)

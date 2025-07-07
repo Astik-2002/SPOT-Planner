@@ -37,13 +37,18 @@
 #include "rrt_path_finder/ciri_ellip.h"
 #include "rrt_path_finder/ciri_sphere.h"
 #include "rrt_path_finder/gcopter.hpp"
+#include "rrt_path_finder/gcopter_fixed.hpp"
 #include "rrt_path_finder/trajectory.hpp"
 #include "rrt_path_finder/geo_utils.hpp"
 #include "rrt_path_finder/quickhull.hpp"
 #include "rrt_path_finder/voxel_map.hpp"
-#include "rrt_path_finder/corridor_finder_ellip.h"
+#include "rrt_path_finder/corridor_finder_dynamic.h"
+#include "rrt_path_finder/datatype_dynamic.h"
 #include "rrt_path_finder/yaw_optimization.hpp"
 #include "rrt_path_finder/non_uniform_bspline.hpp"
+#include "custom_interface_gym/msg/dynamic_bbox.hpp"
+#include "custom_interface_gym/msg/bounding_box_array.hpp"
+
 using namespace std;
 using namespace Eigen;
 using namespace pcl;
@@ -60,10 +65,10 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 0.7);
-        this->declare_parameter("uav_radius", 0.7);
-        this->declare_parameter("search_margin", 0.3);
-        this->declare_parameter("max_radius", 2.0);
+        this->declare_parameter("safety_margin", 0.3);
+        this->declare_parameter("uav_radius", 0.4);
+        this->declare_parameter("search_margin", 0.1);
+        this->declare_parameter("max_radius", 5.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
         this->declare_parameter("sample_portion", 0.25);
@@ -73,13 +78,13 @@ public:
         this->declare_parameter("stop_horizon", 0.5);
         this->declare_parameter("commit_time", 1.0);
 
-        this->declare_parameter("x_l", -70.0);
+        this->declare_parameter("x_l", -5.0);
         this->declare_parameter("x_h", 70.0);
         this->declare_parameter("y_l", -7.0);
         this->declare_parameter("y_h", 7.0);
         // this->declare_parameter("z_l", 1.0);
-        this->declare_parameter("z_l2", 0.5);
-        this->declare_parameter("z_l", 0.8);
+        this->declare_parameter("z_l2", 0.0);
+        this->declare_parameter("z_l", 0.2);
 
         // this->declare_parameter("z_h", 1.0);
         this->declare_parameter("z_h2", 2.0);
@@ -130,7 +135,6 @@ public:
         _vis_mesh_pub = this->create_publisher<visualization_msgs::msg::Marker>("_vis_mesh", 10);
         _vis_edge_pub = this->create_publisher<visualization_msgs::msg::Marker>("_vis_edge", 10);
         _vis_commit_target = this->create_publisher<visualization_msgs::msg::Marker>("_vis_commit_target", 10);
-        // _vis_ellipsoid = this->create_publisher<visualization_msgs::msg::Marker>("_vis_ellipsoid_marker", 10);
         _vis_ellipsoid = this->create_publisher<visualization_msgs::msg::MarkerArray>("_vis_ellipsoid_marker", 10);
 
         _vis_trajectory_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("_vis_trajectory", 10);
@@ -139,6 +143,12 @@ public:
         _rrt_waypoints_pub = this->create_publisher<nav_msgs::msg::Path>("rrt_waypoints", 1);
         _rrt_des_traj_pub = this->create_publisher<custom_interface_gym::msg::DesTrajectory>("des_trajectory",10);
         _corridor_endpoint_pub = this->create_publisher<geometry_msgs::msg::PoseStamped>("corridor_endpoint", 1); // For yaw control
+        pcl_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("static_pointcloud", 10);
+        dynamic_pcl_pub_1_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("dynamic_pcd_gym_pybullet_1", 10);
+        dynamic_pcl_pub_2_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("dynamic_pcd_gym_pybullet_2", 10);
+        dynamic_pcl_pub_3_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("dynamic_pcd_gym_pybullet_3", 10);
+        dynamic_pcl_pub_4_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("dynamic_pcd_gym_pybullet_4", 10);
+        dynamic_pcl_pub_0_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("dynamic_pcd_gym_pybullet_0", 10);
 
         // Subscribers
         // _obs_sub = this->create_subscription<std_msgs::msg::Float32MultiArray>(
@@ -150,6 +160,8 @@ public:
             "noisy_pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
         _odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom", 10, std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1));
+        _bbox_sub = this->create_subscription<custom_interface_gym::msg::BoundingBoxArray>(
+            "/dynamic_obs_state", 10, std::bind(&PointCloudPlanner::bboxCallback, this, std::placeholders::_1));
 
         // _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
         //     "/transformed_points", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
@@ -161,7 +173,7 @@ public:
 
         // Timer for planning
         _planning_timer = this->create_wall_timer(
-            std::chrono::duration<double>(0.1),
+            std::chrono::duration<double>(0.2),
             std::bind(&PointCloudPlanner::planningCallBack, this));
     };
 
@@ -181,14 +193,21 @@ private:
     // RRT waypoints publisher
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr _rrt_waypoints_pub;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr _corridor_endpoint_pub;
-    // rclcpp::Publisher<custom_interface_gym::msg::TrajMsg>::SharedPtr _rrt_traj_pub;
     rclcpp::Publisher<custom_interface_gym::msg::DesTrajectory>::SharedPtr _rrt_des_traj_pub;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pcl_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_1_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_2_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_3_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_4_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_0_;
+
 
     // Subscribers
     // rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr _obs_sub;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr _dest_pts_sub;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr _map_sub;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr _odometry_sub;
+    rclcpp::Subscription<custom_interface_gym::msg::BoundingBoxArray>:: SharedPtr _bbox_sub;
     // rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr _map_sub;
     // rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr _odometry_sub;
 
@@ -207,6 +226,7 @@ private:
     std::vector<Eigen::MatrixX4d> hpolys; // Matrix to store hyperplanes
     std::vector<Eigen::Vector3d> pcd_points; // Datastructure to hold pointcloud points in a vector
     std::vector<Eigen::Vector3d> corridor_points; // vector for storing points for which corridor is contructed
+    std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points;
 
     tf2::Quaternion enu_q_global;
     
@@ -224,13 +244,15 @@ private:
     float threshold = 0.8;
     int trajectory_id = 0;
     int order = 5;
+    int pcd_idx = 0;
     double convexCoverRange = 1.0;
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
-    safeRegionRrtStar _rrtPathPlanner;
-    // safeRegionRrtStarEllip _rrtPathPlanner;
+    safeRegionRrtStarDynamic _rrtPathPlanner;
+    // safeRegionRrtStarDynamicEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
+    gcopter_fixed::GCOPTER_PolytopeSFC_FixedTime _gCopter_fixed;
     Trajectory<5> _traj;
     super_planner::CIRI_e ciri_e;
     super_planner::CIRI_s ciri_s;
@@ -244,7 +266,8 @@ private:
     float leafsize = 0.4;
     // Variables for target position, trajectory, odometry, etc.
     Eigen::Vector3d _start_pos, _end_pos, _start_vel{0.0, 0.0, 0.0}, _last_vel{0.0, 0.0, 0.0}, _start_acc;
-    Eigen::Vector3d _commit_target{0.0, 0.0, 0.0}, _corridor_end_pos;
+    Eigen::Vector4d _commit_target{0.0, 0.0, 0.0, 0.0};
+    Eigen::Vector3d _corridor_end_pos;
     std::vector<geometry_utils::Ellipsoid> tangent_obs;
     super_utils::Mat3f rotation_matrix = super_utils::Mat3f::Identity();
     // uav physical params
@@ -252,10 +275,11 @@ private:
     float horizontal_drag_coeff = 0.000001;
     float vertical_drag_coeff = 0.000001;
     float t2w = 2.250000;
-    
+    double delta_t = 1.0;
     Eigen::MatrixXd _path;
     Eigen::VectorXd _radius;
-    std::vector<Eigen::Vector3d> _path_vector;
+    std::vector<Eigen::Vector4d> _path_vector;
+    std::vector<Eigen::Matrix3d> dynamic_obs_array;
     std::vector<double> _radius_vector;
 
     nav_msgs::msg::Odometry _odom;
@@ -266,6 +290,7 @@ private:
     bool _is_complete = false;
     bool _is_yaw_enabled = true;
     bool uncertanity_compensation = true;
+    pcl::PointCloud<pcl::PointXYZ> cloud_input;
 
 
     // ROS 2-compatible callback functions
@@ -318,114 +343,42 @@ private:
 
         // Store the yaw angle
         current_yaw = yaw; // Yaw in radians
-        
-        // odom_time = std::chrono::steady_clock::time_point(
-        //     std::chrono::seconds(_odom.header.stamp.sec) +
-        //     std::chrono::nanoseconds(_odom.header.stamp.nanosec)
-        // );
         auto current_time = rclcpp::Time(_odom.header.stamp.sec, _odom.header.stamp.nanosec);
         auto del_t = (current_time - odom_time).seconds();
         _start_acc = (_start_vel - _last_vel)/(del_t);
         odom_time = rclcpp::Time(_odom.header.stamp.sec, _odom.header.stamp.nanosec);
-        if(_rrtPathPlanner.getDis(_start_pos, _commit_target) < threshold)
+        if(_rrtPathPlanner.getDis(_start_pos, _commit_target.head<3>()) < threshold)
         {
-            // obsvstamp = std::chrono::steady_clock::now();
             _is_target_arrive = true;
         }
         else
         {
             _is_target_arrive = false;
-
-            // std::cout<<"[commit debug] distance to endgoal: "<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
         }
-        // if(_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1.0)
-        // {
-        //     _is_complete = true;   
-        // }
-        checkSafeTrajectory();
-        // std::cout<<"[odom callback] distance to commit target: "<<_rrtPathPlanner.getDis(_start_pos, _commit_target)<<std::endl;
-        // std::cout<<"[odom callback] current position "<<_start_pos.transpose()<<" distance left"<<_rrtPathPlanner.getDis(_start_pos, _end_pos)<<std::endl;
-        // std::cout<<"[odom callback] debugging distance issue"<<(_start_pos - _end_pos).norm()<<std::endl;
-
-        // std::cout<<"[odom callback]  UAV speed: "<<_start_vel.norm()<<std::endl;
-
-        // RCLCPP_WARN(this->get_logger(), "Received odometry: position(x: %.2f, y: %.2f, z: %.2f)",
-               // _odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose);
+        // checkSafeTrajectory();
     }
-/*
-    // void rcvOdomCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
-    // {
 
-    //     std::cout << "Entered in odometry callback" << std::endl;
+    void bboxCallback(const custom_interface_gym::msg::BoundingBoxArray::SharedPtr msg)
+    {
+        dynamic_obs_array.clear();
+        for(auto bbox : msg->boxes)
+        {
+            Eigen::Matrix3d bbox_mat;
+            bbox_mat(0, 0) = bbox.center_x;
+            bbox_mat(0, 1) = bbox.center_y;
+            bbox_mat(0, 2) = bbox.center_z;
 
-    //     Eigen::Vector3d ned_pos(msg->position[0], msg->position[1], msg->position[2]);
-    //     Eigen::Vector3d ned_vel(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
+            bbox_mat(1, 0) = bbox.velocity_x;
+            bbox_mat(1, 1) = bbox.velocity_y;
+            bbox_mat(1, 2) = bbox.velocity_z;
 
-    //     // Convert NED to ENU (Position)
-    //     Eigen::Vector3d enu_pos(ned_pos.x(), -ned_pos.y(), -ned_pos.z());
-    //     Eigen::Vector3d enu_vel(ned_vel.x(), -ned_vel.y(), -ned_vel.z());
+            bbox_mat(2, 0) = bbox.height;
+            bbox_mat(2, 1) = bbox.length;
+            bbox_mat(2, 2) = bbox.width;
+            dynamic_obs_array.push_back(bbox_mat);
+        }
+    }
 
-    //     // Convert Quaternion (NED → ENU)
-    //     tf2::Quaternion ned_q(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
-
-    //     // Rotation from NED to ENU: π/2 about Z, π about X
-    //     // tf2::Quaternion rot1, rot2;
-    //     // rot1.setRPY(0, 0, M_PI_2); // 90-degree rotation around Z
-    //     // rot2.setRPY(-M_PI_2, 0, 0);   // 180-degree rotation around X
-    //     // tf2::Quaternion enu_q = rot1 * rot2 * ned_q;
-    //     tf2::Quaternion enu_q = ned_q;
-    //     enu_q.normalize();
-
-    //     // tf2::Quaternion enu_q(msg->q[0], msg->q[1], -msg->q[2], -msg->q[3]);
-
-    //     enu_q_global = enu_q;
-    //     // Store converted values
-    //     _start_pos = enu_pos;
-    //     _start_vel = enu_vel;
-
-    //     std::cout<<"Start Pos is : "<<_start_pos[0]<<' ' <<_start_pos[1]<<' '<<_start_pos[2]<<std::endl;
-    //     std::cout<<"End Pos is : "<<_end_pos[0]<<' ' <<_end_pos[1]<<' '<<_end_pos[2]<<std::endl;
-
-    //     // Calculate time difference in seconds
-    //     auto current_time = rclcpp::Time(msg->timestamp);
-    //     auto del_t = (current_time - odom_time).seconds();
-
-    //     // Calculate acceleration if the time difference is non-zero
-    //     if (del_t > 0.0) {
-    //         _start_acc = (_start_vel - _last_vel) / del_t;
-    //     }
-
-    //     // Update the last velocity
-    //     _last_vel = _start_vel;
-
-    //     // Store the current timestamp for the next callback
-    //     odom_time = current_time;
-
-    //     // Check if the vehicle has arrived at the commit target
-    //     if (_rrtPathPlanner.getDis(_start_pos, _commit_target) < threshold) {
-    //         _is_target_arrive = true;
-    //     } else {
-    //         _is_target_arrive = false;
-    //     }
-
-    //     // Check if the vehicle has reached the end goal
-    //     if (_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1) {
-    //         _is_complete = true;
-    //     }
-
-    //     // Check and handle safe trajectory (if any)
-    //     checkSafeTrajectory();
-
-    //     // Print debugging information
-    //     // std::cout << "[odom callback] distance to commit target: "
-    //     //           << _rrtPathPlanner.getDis(_start_pos, _commit_target) << std::endl;
-    //     std::cout << "[odom callback] current position " << _start_pos.transpose()
-    //               << " end position: " << _end_pos.transpose() << std::endl;
-    //     std::cout << "[odom callback] debugging distance issue: "
-    //               << (_start_pos - _end_pos).norm() << std::endl;
-    //     std::cout << "[odom callback] UAV speed: " << _start_vel.norm() << std::endl;
-    // }
-*/
     void rcvPointCloudCallBack(const sensor_msgs::msg::PointCloud2::SharedPtr pointcloud_msg)
     {
         if (pointcloud_msg->data.empty())
@@ -433,20 +386,9 @@ private:
 
         // Transform the point cloud from camera frame to map frame
         sensor_msgs::msg::PointCloud2 cloud_transformed;
-
         try
         {
             tf_buffer_.transform(*pointcloud_msg, cloud_transformed, "ground_link", tf2::durationFromSec(0.1));
-            // geometry_msgs::msg::TransformStamped transform_stamped;
-            // transform_stamped = tf_buffer_.lookupTransform("ground_link", pointcloud_msg->header.frame_id, tf2::TimePointZero);
-            // const auto& q = transform_stamped.transform.rotation;
-
-            // // Convert quaternion to Eigen
-            // Eigen::Quaterniond eigen_quat(q.w, q.x, q.y, q.z);
-    
-            // // Convert quaternion to rotation matrix
-            // rotation_matrix = eigen_quat.toRotationMatrix();
-    
         }
         catch (tf2::TransformException &ex)
         {
@@ -454,93 +396,43 @@ private:
             return;
         }
 
-        pcl::PointCloud<pcl::PointXYZ> cloud_input;
+        cloud_input.clear();
         pcl::fromROSMsg(cloud_transformed, cloud_input);
-        //pcl::fromROSMsg(*pointcloud_msg, cloud_input);
+
         if (cloud_input.points.empty())
             return;
 
         _is_has_map = true;
-        // std::cout<<"size of subscribed pcd: "<<cloud_input.points.size()<<std::endl;
-        pcd_points.clear();
+        dynamic_points.clear();
+        pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+        dynamic_cloud->points.reserve(cloud_input.points.size() / 10);  // Heuristic guess
 
-        pcd_points.reserve(cloud_input.points.size());
+        // Efficient segmentation and filtering using std::remove_if
+        auto& points = cloud_input.points;
+        auto new_end = std::remove_if(points.begin(), points.end(),
+            [&](const pcl::PointXYZ& point) {
+                for (const auto& bbox : dynamic_obs_array)
+                {
+                    double cx = bbox(0, 0), cy = bbox(0, 1), cz = bbox(0, 2);
+                    double half_height = bbox(2, 0) / 2.0;
+                    double half_length = bbox(2, 1) / 2.0;
+                    double half_width  = bbox(2, 2) / 2.0;
+                    Eigen::Vector3d bbox_velocity(bbox(1, 0), bbox(1, 1), bbox(1, 2));
+                    if (point.x >= cx - half_length && point.x <= cx + half_length &&
+                        point.y >= cy - half_width  && point.y <= cy + half_width &&
+                        point.z >= cz - half_height && point.z <= cz + half_height)
+                    {
+                        dynamic_cloud->points.push_back(point);
+                        dynamic_points.emplace_back(Eigen::Vector3d(point.x, point.y, point.z), bbox_velocity);
+                        return true;  // Remove from static cloud
+                    }
+                }
+                return false;  // Keep in static cloud
+            });
 
-        for (const auto& pt : cloud_input.points) 
-        {
-            pcd_points.emplace_back(pt.x, pt.y, pt.z);
-        }
-        /*
-        for(auto pt: cloud_input.points)
-        {
-            double x = pt.x;
-            double y = pt.y;
-            double z = pt.z;
-            
-            double distance = sqrt(pow(x,2) + pow(y,2) + pow(z,2));
-
-            if(distance > _commit_distance)
-            {
-                continue;
-            }
-            double sigma_x = 0.001063 + 0.0007278*distance + 0.003949*pow(distance, 2) + 0.022*pow(distance, 3/2);
-            double sigma_y = 0.04;
-            double sigma_z = sigma_y;
-            std::default_random_engine generator;
-            std::normal_distribution<double> distribution_x(0.0, sigma_x);
-            std::normal_distribution<double> distribution_y(0.0, sigma_y);
-            std::normal_distribution<double> distribution_z(0.0, sigma_z);
-
-            double noise_x = distribution_x(generator);
-            double noise_y = distribution_y(generator);
-            double noise_z = distribution_z(generator);
-            
-            
-            double dr1 = _safety_margin; // sqrt(pow(noise_x,2) + pow(noise_y,2) + pow(noise_z,2)); // constant value added
-            double dr2 = dr1/2;
-            std::vector<double> dr_vec{dr1, dr2};
-            for(double dr: dr_vec)
-            {
-                Eigen::Vector3d p1(x + dr, y - dr, z), p2(x + dr, y, z), p3(x + dr, y + dr, z), p4(x, y - dr, z);
-                Eigen::Vector3d p5(x, y + dr, z), p6(x - dr, y - dr, z), p7(x - dr, y, z), p8(x - dr, y + dr, z), p9(x + dr, y - dr, z - dr);
-                Eigen::Vector3d p10(x + dr, y, z - dr), p11(x + dr, y + dr, z - dr), p12(x, y - dr, z - dr), p13(x, y + dr, z - dr), p14(x - dr, y - dr, z - dr);
-                Eigen::Vector3d p15(x - dr, y, z - dr), p16(x - dr, y + dr, z - dr), p17(x + dr, y - dr, z + dr), p18(x + dr, y, z + dr), p19(x + dr, y + dr, z + dr);
-                Eigen::Vector3d p20(x, y - dr, z + dr), p21(x, y + dr, z + dr), p22(x - dr, y - dr, z + dr), p23(x - dr, y, z + dr), p24(x - dr, y + dr, z + dr);
-                Eigen::Vector3d p25(x, y, z - dr), p26(x, y, z + dr);
-                pcd_points.push_back(p1);
-                pcd_points.push_back(p2);
-                pcd_points.push_back(p3);
-                pcd_points.push_back(p4);
-                pcd_points.push_back(p5);
-                pcd_points.push_back(p6);
-                pcd_points.push_back(p7);
-                pcd_points.push_back(p8);
-                pcd_points.push_back(p9);
-                pcd_points.push_back(p10);
-                pcd_points.push_back(p11);
-                pcd_points.push_back(p12);
-                pcd_points.push_back(p13);
-                pcd_points.push_back(p14);
-                pcd_points.push_back(p15);
-                pcd_points.push_back(p16);
-                pcd_points.push_back(p17);
-                pcd_points.push_back(p18);
-                pcd_points.push_back(p19);
-                pcd_points.push_back(p20);
-                pcd_points.push_back(p21);
-                pcd_points.push_back(p22);
-                pcd_points.push_back(p23);
-                pcd_points.push_back(p24);
-                pcd_points.push_back(p25);
-                pcd_points.push_back(p26);
-
-            }
-            
-        }*/
-        _rrtPathPlanner.setInput(cloud_input, _start_pos);
-        _rrtPathPlanner.setInputforCollision(cloud_input);
-        //RCLCPP_WARN(this->get_logger(), "Point Cloud received");
-        
+        points.erase(new_end, points.end());
+        pcd_idx += 1;
+        _rrtPathPlanner.setInputDynamic(cloud_input, dynamic_points, _start_pos, pcd_idx);
     }
 
     // Function to publish RRT waypoints
@@ -570,7 +462,10 @@ private:
         float r = 0;
         if(_rrtPathPlanner.getDis(_start_pos, _end_pos) < _commit_distance)
         {
-            corridor_points = _path_vector;
+            for (Eigen::Vector4d pt4d : _path_vector)
+            {
+                corridor_points.push_back(pt4d.head<3>());
+            }
             _corridor_end_pos = _end_pos;
             return;
         }
@@ -580,7 +475,7 @@ private:
             {
                 if(r < _commit_distance && _radius[i] > _safety_margin)
                 {
-                    corridor_points.push_back(_path_vector[i]);
+                    corridor_points.push_back(_path_vector[i].head<3>());
                     r += _radius[i];
                 }
             }
@@ -597,7 +492,25 @@ private:
         _corridor_endpoint_pub->publish(corridor_pose);
     
     }
+    std::vector<Eigen::Vector3d> getObstaclePoints(int &n)
+    {
+        std::vector<Eigen::Vector3d> obstacle_points;
+        int k = cloud_input.points.size();
+        for (int i=0; i<k; i++)
+        {
+            auto pt = cloud_input.points[i];
+            Eigen::Vector3d pos(pt.x, pt.y, pt.z);
+            obstacle_points.push_back(pos);
+        }
+        std::cout<<"input cloud size: "<<k<<std::endl;
+        for (const auto& [position, velocity] : dynamic_points)
+        {
+            Eigen::Vector3d pos = position + n*delta_t*velocity;
+            obstacle_points.push_back(pos);
+        }
 
+        return obstacle_points;
+    }
     void convexCover(const std::vector<Eigen::Vector3d> &path, 
                         const double &range,
                         const double eps)
@@ -619,7 +532,7 @@ private:
         Eigen::Vector3d b = a;
         std::vector<Eigen::Vector3d> valid_pc;
         std::vector<Eigen::Vector3d> bs;
-        valid_pc.reserve(pcd_points.size());
+        valid_pc.reserve(cloud_input.points.size());
         for (int i = 1; i < n;)
         {
             Eigen::Vector3d path_point = path[i];
@@ -636,7 +549,8 @@ private:
             bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
 
             valid_pc.clear();
-            for (const Eigen::Vector3d &p : pcd_points)
+            auto obstacle_points = getObstaclePoints(n);
+            for (const Eigen::Vector3d &p : obstacle_points)
             {
                 if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
                 {
@@ -689,7 +603,7 @@ private:
         Eigen::Vector3d b = a;
         std::vector<Eigen::Vector3d> valid_pc;
         std::vector<Eigen::Vector3d> bs;
-        valid_pc.reserve(pcd_points.size());
+        valid_pc.reserve(cloud_input.points.size());
         ciri.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
         for (int i = 0; i < n;)
         {
@@ -708,7 +622,9 @@ private:
             bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
 
             valid_pc.clear();
-            for (const Eigen::Vector3d &p : pcd_points)
+            auto obstacle_points = getObstaclePoints(n);
+
+            for (const Eigen::Vector3d &p : obstacle_points)
             {
                 if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
                 {
@@ -783,7 +699,7 @@ private:
         Eigen::Vector3d b = a;
         std::vector<Eigen::Vector3d> valid_pc;
         std::vector<Eigen::Vector3d> bs;
-        valid_pc.reserve(pcd_points.size());
+        valid_pc.reserve(cloud_input.points.size());
         ciri_e.setupParams(_uav_radius, 1); // Setup CIRI with robot radius and iteration number
         for (int i = 0; i < n;)
         {
@@ -810,7 +726,8 @@ private:
             bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
 
             valid_pc.clear();
-            for (const Eigen::Vector3d &p : pcd_points)
+            auto obstacle_points = getObstaclePoints(n);
+            for (const Eigen::Vector3d &p : obstacle_points)
             {
                 if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
                 {
@@ -884,7 +801,7 @@ private:
         Eigen::Vector3d b = a;
         std::vector<Eigen::Vector3d> valid_pc;
         std::vector<Eigen::Vector3d> bs;
-        valid_pc.reserve(pcd_points.size());
+        valid_pc.reserve(cloud_input.points.size());
         ciri_s.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
 
         for (int i = 0; i < n;)
@@ -903,7 +820,8 @@ private:
             bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
 
             valid_pc.clear();
-            for (const Eigen::Vector3d &p : pcd_points)
+            auto obstacle_points = getObstaclePoints(n);
+            for (const Eigen::Vector3d &p : obstacle_points)
             {
                 if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
                 {
@@ -1179,8 +1097,111 @@ private:
                 yaw_traj_generation(_traj, des_traj_msg);
             }
             _rrt_des_traj_pub->publish(des_traj_msg);
-            _commit_target = _traj.getPos(_traj.getTotalDuration()*0.5);
-            
+            _commit_target.head<3>() = _traj.getPos(_traj.getTotalDuration()*0.5);
+            _commit_target[3] = _traj.getTotalDuration()*0.5;
+            // std::cout<<std::endl;
+            return;
+        }
+    }
+
+    void traj_generation_fixed_time(Eigen::Vector3d _traj_start_pos, Eigen::Vector3d _traj_start_vel, Eigen::Vector3d _traj_start_acc)
+    {
+        auto t1 = std::chrono::steady_clock::now();
+        // GCopter parameters
+        Eigen::Matrix3d iniState;
+        Eigen::Matrix3d finState;
+        iniState << _traj_start_pos, _traj_start_vel, _traj_start_acc;
+        finState << _corridor_end_pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
+        Eigen::VectorXd magnitudeBounds(5);
+        Eigen::VectorXd penaltyWeights(5);
+        Eigen::VectorXd physicalParams(6);
+        std::vector<float> chiVec = {10000, 10000, 10000, 10000, 100000};
+        magnitudeBounds(0) = max_vel;
+        magnitudeBounds(1) = 2.1;
+        magnitudeBounds(2) = 1.05;
+        magnitudeBounds(3) = 0.5*mass*9.8;
+        magnitudeBounds(4) = t2w*mass*9.8;
+        penaltyWeights(0) = chiVec[0];
+        penaltyWeights(1) = chiVec[1];
+        penaltyWeights(2) = chiVec[2];
+        penaltyWeights(3) = chiVec[3];
+        penaltyWeights(4) = chiVec[4];
+        physicalParams(0) = mass;
+        physicalParams(1) = 9.8;
+        physicalParams(2) = horizontal_drag_coeff;
+        physicalParams(3) = vertical_drag_coeff;
+        physicalParams(4) = vertical_drag_coeff/10;
+        physicalParams(5) = 0.0001;
+        int quadratureRes = 16;
+        float weightT = 20.0;
+        float smoothingEps = 0.6;
+        float relcostto1 = 1e-3;
+        _traj.clear();
+        if (!_gCopter.setup(weightT, iniState, finState, hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams))
+        {
+            std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
+            _is_traj_exist = false;
+            custom_interface_gym::msg::DesTrajectory des_traj_msg;
+            des_traj_msg.header.stamp = rclcpp::Clock().now();
+            des_traj_msg.header.frame_id = "ground_link";
+            des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+            _rrt_des_traj_pub->publish(des_traj_msg);
+            return;
+        }
+        if (std::isinf(_gCopter.optimize(_traj, relcostto1)))
+        {
+            std::cout<<"gcopter optimization cost is infinity, traj exist set to false"<<std::endl;
+            _is_traj_exist = false;
+            custom_interface_gym::msg::DesTrajectory des_traj_msg;
+            des_traj_msg.header.stamp = rclcpp::Clock().now();
+            des_traj_msg.header.frame_id = "ground_link";
+            des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+            _rrt_des_traj_pub->publish(des_traj_msg);
+            return;
+        }
+        if (_traj.getPieceNum() > 0)
+        {
+            auto t2 = std::chrono::steady_clock::now();
+            auto elapsed_traj = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
+            traj_gen_time = elapsed_traj;
+            trajstamp = rclcpp::Clock().now();
+            _is_traj_exist = true;
+            custom_interface_gym::msg::DesTrajectory des_traj_msg;
+            des_traj_msg.header.stamp = rclcpp::Clock().now();
+            des_traj_msg.header.frame_id = "ground_link";
+            des_traj_msg.trajectory_id = trajectory_id++;
+            des_traj_msg.action = des_traj_msg.ACTION_ADD;
+            des_traj_msg.num_order = order;
+            des_traj_msg.num_segment = _traj.getPieceNum();
+            Eigen::VectorXd durations = _traj.getDurations();
+            std::vector<double> durations_vec(durations.data(), durations.data() + durations.size());
+            auto coefficient_mat = _traj.getCoefficientMatrices();
+            // for (auto mat : coefficient_mat)
+            // {
+            //     std::cout<<"######## mat #########"<<std::endl;
+            //     std::cout<<mat<<std::endl;
+            // }
+            for(int i=0; i<_traj.getPieceNum(); i++)
+            {
+                des_traj_msg.duration_vector.push_back(durations_vec[i]);
+                for(int j=0; j<coefficient_mat[i].rows(); j++)
+                {
+                    for(int k=0; k<coefficient_mat[i].cols(); k++)
+                    {
+                        des_traj_msg.matrices_flat.push_back(coefficient_mat[i](j, k));
+                        // only for debugging 
+                    }
+                }
+            }
+            des_traj_msg.debug_info = "trajectory_id: "+std::to_string(trajectory_id-1);
+
+            if(_is_yaw_enabled)
+            {
+                yaw_traj_generation(_traj, des_traj_msg);
+            }
+            _rrt_des_traj_pub->publish(des_traj_msg);
+            _commit_target.head<3>() = _traj.getPos(_traj.getTotalDuration()*0.5);
+            _commit_target[3] = _traj.getTotalDuration()*0.5;
             // std::cout<<std::endl;
             return;
         }
@@ -1192,8 +1213,8 @@ private:
     {
         _rrtPathPlanner.reset();
         _rrtPathPlanner.setPt(_start_pos, _end_pos, _x_l, _x_h, _y_l, _y_h, _z_l, _z_h,
-                             _sample_range, _max_samples, _sample_portion, _goal_portion, current_yaw);
-        _rrtPathPlanner.SafeRegionExpansion(0.05);
+                             _sample_range, _max_samples, _sample_portion, _goal_portion, current_yaw, 2.0, 4.0, 10.0, delta_t);
+        _rrtPathPlanner.SafeRegionExpansion(10.00);
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
 
         if (_rrtPathPlanner.getPathExistStatus())
@@ -1205,24 +1226,26 @@ private:
             auto t1 = std::chrono::steady_clock::now();
             // convexCover(corridor_points, convexCoverRange, 1.0e-6);
             // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-            convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+            // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
-            // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+            convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
 
             convexDecompTime = elapsed_convex;
             std::cout<<"[Initial planning] time taken in corridor generation "<<elapsed_convex<<std::endl;
-
-            traj_generation(_start_pos, _start_vel, Eigen::Vector3d::Zero());
+            std::cout<<"[initial planning] debug 1"<<std::endl;
+            traj_generation_fixed_time(_start_pos, _start_vel, Eigen::Vector3d::Zero());
             if(_is_traj_exist)
             {
+                std::cout<<"[initial planning] debug 2"<<std::endl;
                 _rrtPathPlanner.resetRoot(_commit_target);
                 visualizePolytope(hpolys);
                 visualizeObs(tangent_obs, 2);
                 visualizeTrajectory(_traj);
             }      
+            std::cout<<"[initial planning] debug 3"<<std::endl;
 
         }
         else
@@ -1275,9 +1298,9 @@ private:
 
                 // convexCover(corridor_points, convexCoverRange, 1.0e-6);
                 // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-                convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+                // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 // polygon_dilation(hpolys);
-                // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+                convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 
                 shortCut();
                 auto t2 = std::chrono::steady_clock::now();
@@ -1296,7 +1319,7 @@ private:
 
                 convexDecompTime = elapsed;
 
-                traj_generation(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
+                traj_generation_fixed_time(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
                 if(_is_traj_exist)
                 {
                     _rrtPathPlanner.resetRoot(_commit_target);
@@ -1319,8 +1342,8 @@ private:
             // std::cout<<"[Incremental planner] in refine and evaluate loop"<<std::endl;
             auto time_start_ref = std::chrono::steady_clock::now();
             // Continue refining and evaluating the path
-            _rrtPathPlanner.SafeRegionRefine(0.15);
-            _rrtPathPlanner.SafeRegionEvaluate(0.05);
+            _rrtPathPlanner.SafeRegionRefine(1.0);
+            _rrtPathPlanner.SafeRegionEvaluate(1.0);
             auto time_end_ref = std::chrono::steady_clock::now();
 
             // Get the updated path and publish it
@@ -1383,21 +1406,22 @@ private:
 
     bool checkSafeTrajectory()
     {   
-        auto delta_t = (odom_time - trajstamp).seconds();
+        auto delta_t_c = (odom_time - trajstamp).seconds();
         // std::cout<<"[safety debug] delta T: "<<delta_t<<std::endl;
 
         if(!_is_traj_exist) return false;
-        double T = max(0.0, delta_t);
+        double T = max(0.0, delta_t_c);
         // std::cout<<"[safety debug] checking safe trajectory, delta t = "<<T<<std::endl;
         for(double t = T; t < _traj.getTotalDuration()*0.60; t += 0.01)
         {
             auto pos_t = _traj.getPos(t);
-            if(_rrtPathPlanner.checkTrajPtCol(pos_t))
-            {
-                RCLCPP_WARN(this->get_logger(), "UNSAFE Trajectory: reverting to new generation");
-                _is_traj_exist = false;
-                return false;
-            }
+            // TODO::: 
+            // if(_rrtPathPlanner.checkTrajPtCol(pos_t))
+            // {
+            //     RCLCPP_WARN(this->get_logger(), "UNSAFE Trajectory: reverting to new generation");
+            //     _is_traj_exist = false;
+            //     return false;
+            // }
         }
         return true;
     }
@@ -1535,13 +1559,13 @@ private:
     }
 
 
-    void visRrt(const std::vector<NodePtr>& nodes)
+    void visRrt(const std::vector<NodePtr_dynamic>& nodes)
     {
         visualization_msgs::msg::MarkerArray tree_markers;
         int marker_id = 0;
 
         // Get the tree from the RRT planner
-        std::vector<NodePtr> nodeList = _rrtPathPlanner.getTree();
+        std::vector<NodePtr_dynamic> nodeList = _rrtPathPlanner.getTree();
 
         // Loop through all the nodes in the tree
         for (const auto &node : nodeList) {
@@ -1660,9 +1684,9 @@ private:
             marker.action = visualization_msgs::msg::Marker::ADD;
             
             // Set position of the marker
-            marker.pose.position.x = _commit_target.x();
-            marker.pose.position.y = _commit_target.y();
-            marker.pose.position.z = _commit_target.z();
+            marker.pose.position.x = _commit_target(0);
+            marker.pose.position.y = _commit_target(1);
+            marker.pose.position.z = _commit_target(2);
 
             // Set scale (diameter based on radius)
             double diameter = 2.0 * 0.25; // Radius to diameter
@@ -1724,15 +1748,16 @@ private:
         // std::cout<<"[obstacle vis debug] obstacle visualized"<<std::endl;
     }
 
-    std::vector<Eigen::Vector3d> matrixToVector(const Eigen::MatrixXd& path_matrix)
+    std::vector<Eigen::Vector4d> matrixToVector(const Eigen::MatrixXd& path_matrix)
     {
-        std::vector<Eigen::Vector3d> path_vector;
+        std::vector<Eigen::Vector4d> path_vector;
         for (int i = 0; i < path_matrix.rows(); ++i)
         {
-            Eigen::Vector3d point;
-            point.x() = path_matrix(i, 0);
-            point.y() = path_matrix(i, 1);
-            point.z() = path_matrix(i, 2);
+            Eigen::Vector4d point;
+            point[0] = path_matrix(i, 0);
+            point[1] = path_matrix(i, 1);
+            point[2] = path_matrix(i, 2);
+            point[3] = path_matrix(i, 3);
             path_vector.push_back(point);
         }
         return path_vector;

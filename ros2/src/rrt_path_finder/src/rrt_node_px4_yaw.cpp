@@ -14,6 +14,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include "std_msgs/msg/float32_multi_array.hpp"
@@ -41,7 +42,6 @@
 #include "rrt_path_finder/geo_utils.hpp"
 #include "rrt_path_finder/quickhull.hpp"
 #include "rrt_path_finder/voxel_map.hpp"
-#include "rrt_path_finder/corridor_finder_ellip.h"
 #include "rrt_path_finder/yaw_optimization.hpp"
 #include "rrt_path_finder/non_uniform_bspline.hpp"
 using namespace std;
@@ -60,10 +60,10 @@ public:
         // rrt.setPt(startPt=start_point, endPt=end_point, xl=-5, xh=15, yl=-5, yh=15, zl=0.0, zh=1,
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
-        this->declare_parameter("safety_margin", 1.5);
-        this->declare_parameter("uav_radius", 1.5);
-        this->declare_parameter("search_margin", 0.3);
-        this->declare_parameter("max_radius", 2.0);
+        this->declare_parameter("safety_margin", 1.3);
+        this->declare_parameter("uav_radius", 1.1);
+        this->declare_parameter("search_margin", 0.5);
+        this->declare_parameter("max_radius", 3.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
         this->declare_parameter("sample_portion", 0.25);
@@ -78,8 +78,8 @@ public:
         this->declare_parameter("y_l", -70.0);
         this->declare_parameter("y_h", 70.0);
         // this->declare_parameter("z_l", 1.0);
-        this->declare_parameter("z_l2", 0.5);
-        this->declare_parameter("z_l", 0.8);
+        this->declare_parameter("z_l2", 1.0);
+        this->declare_parameter("z_l", 1.0);
 
         // this->declare_parameter("z_h", 1.0);
         this->declare_parameter("z_h2", 4.0);
@@ -149,10 +149,24 @@ public:
 
         _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/transformed_pointcloud", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
-        _odometry_sub = this->create_subscription<px4_msgs::msg::VehicleOdometry>(
-            "/fmu/out/vehicle_odometry", 
-            rclcpp::QoS(10).best_effort(),  // Set QoS to reliable
-            std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1)
+        // _odometry_sub = this->create_subscription<px4_msgs::msg::VehicleOdometry>(
+        //     "/fmu/out/vehicle_odometry", 
+        //     rclcpp::QoS(10).best_effort(),  // Set QoS to reliable
+        //     std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1)
+        // );
+        
+        rclcpp::QoS mavros_qos(10);
+        mavros_qos.best_effort();  // Match MAVROS default
+        mavros_qos.durability_volatile();
+
+        // MAVROS position and velocity subscribers
+        _mavros_position_sub = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+            "/mavros/local_position/pose", mavros_qos,
+            std::bind(&PointCloudPlanner::rcvPositionCallback, this, std::placeholders::_1)
+        );
+        _mavros_velocity_sub = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+            "/mavros/local_position/velocity_local", mavros_qos,
+            std::bind(&PointCloudPlanner::rcvVelocityCallback, this, std::placeholders::_1)
         );
 
         // Timer for planning
@@ -183,6 +197,10 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr _dest_pts_sub;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr _map_sub;
     rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr _odometry_sub;
+
+    // MAVROS position and velocity subscribers
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr _mavros_position_sub;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr _mavros_velocity_sub;
 
     // Timer
     rclcpp::TimerBase::SharedPtr _planning_timer;
@@ -286,82 +304,116 @@ private:
         _rrtPathPlanner.reset();
     }
 
-    void rcvOdomCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
+    // MAVROS position callback
+    void rcvPositionCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
     {
+        // ENU frame
+        _start_pos(0) = msg->pose.position.x;
+        _start_pos(1) = msg->pose.position.y;
+        _start_pos(2) = msg->pose.position.z;
 
-        std::cout << "Entered in odometry callback" << std::endl;
-
-        Eigen::Vector3d ned_pos(msg->position[0], msg->position[1], msg->position[2]);
-        Eigen::Vector3d ned_vel(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
-
-        // Convert NED to ENU (Position)
-        Eigen::Vector3d enu_pos(ned_pos.x(), -ned_pos.y(), -ned_pos.z());
-        Eigen::Vector3d enu_vel(ned_vel.x(), -ned_vel.y(), -ned_vel.z());
-
-        // Convert Quaternion (NED → ENU)
-        // PX4 odometry format w, x, y, z scalar part first
-        // ROS2 odometry format x, y, z, w scalar part last
-        tf2::Quaternion enu_q(msg->q[1], -msg->q[2], -msg->q[3], msg->q[0]);
-
-        // Rotation from NED to ENU: π/2 about Z, π about X
-        // tf2::Quaternion rot1, rot2;
-        // rot1.setRPY(0, 0, M_PI_2); // 90-degree rotation around Z
-        // rot2.setRPY(-M_PI_2, 0, 0);   // 180-degree rotation around X
-        // tf2::Quaternion enu_q = rot1 * rot2 * ned_q;
-        enu_q.normalize();
-
-        // tf2::Quaternion enu_q(msg->q[0], msg->q[1], -msg->q[2], -msg->q[3]);
-
-        enu_q_global = enu_q;
+        // Optionally, update yaw from quaternion
+        tf2::Quaternion q(
+            msg->pose.orientation.x,
+            msg->pose.orientation.y,
+            msg->pose.orientation.z,
+            msg->pose.orientation.w
+        );
         double roll, pitch, yaw;
-        tf2::Matrix3x3(enu_q_global).getRPY(roll, pitch, yaw);
+        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
         current_yaw = yaw;
-        // Store converted values
-        _start_pos = enu_pos;
-        _start_vel = enu_vel;
-
-        std::cout<<"Start Pos is : "<<_start_pos[0]<<' ' <<_start_pos[1]<<' '<<_start_pos[2]<<std::endl;
-        std::cout<<"End Pos is : "<<_end_pos[0]<<' ' <<_end_pos[1]<<' '<<_end_pos[2]<<std::endl;
-
-        // Calculate time difference in seconds
-        auto current_time = rclcpp::Time(msg->timestamp);
-        auto del_t = (current_time - odom_time).seconds();
-
-        // Calculate acceleration if the time difference is non-zero
-        if (del_t > 0.0) {
-            _start_acc = (_start_vel - _last_vel) / del_t;
-        }
-
-        // Update the last velocity
-        _last_vel = _start_vel;
-
-        // Store the current timestamp for the next callback
-        odom_time = current_time;
-
-        // Check if the vehicle has arrived at the commit target
-        if (_rrtPathPlanner.getDis(_start_pos, _commit_target) < threshold) {
+        if (_rrtPathPlanner.getDis(_start_pos, _commit_target) < 0.5) {
             _is_target_arrive = true;
         } else {
             _is_target_arrive = false;
         }
-
-        // Check if the vehicle has reached the end goal
-        if (_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1) {
-            _is_complete = true;
-        }
-
-        // Check and handle safe trajectory (if any)
         checkSafeTrajectory();
-
-        // Print debugging information
-        // std::cout << "[odom callback] distance to commit target: "
-        //           << _rrtPathPlanner.getDis(_start_pos, _commit_target) << std::endl;
-        std::cout << "[odom callback] current position " << _start_pos.transpose()
-                  << " end position: " << _end_pos.transpose() << std::endl;
-        std::cout << "[odom callback] debugging distance issue: "
-                  << (_start_pos - _end_pos).norm() << std::endl;
-        std::cout << "[odom callback] UAV speed: " << _start_vel.norm() << std::endl;
     }
+
+    // MAVROS velocity callback
+    void rcvVelocityCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
+    {
+        // ENU frame
+        _start_vel(0) = msg->twist.linear.x;
+        _start_vel(1) = msg->twist.linear.y;
+        _start_vel(2) = msg->twist.linear.z;
+    }
+    // void rcvOdomCallback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
+    // {
+
+    //     std::cout << "Entered in odometry callback" << std::endl;
+
+    //     Eigen::Vector3d ned_pos(msg->position[0], msg->position[1], msg->position[2]);
+    //     Eigen::Vector3d ned_vel(msg->velocity[0], msg->velocity[1], msg->velocity[2]);
+
+    //     // Convert NED to ENU (Position)
+    //     Eigen::Vector3d enu_pos(ned_pos.x(), -ned_pos.y(), -ned_pos.z());
+    //     Eigen::Vector3d enu_vel(ned_vel.x(), -ned_vel.y(), -ned_vel.z());
+
+    //     // Convert Quaternion (NED → ENU)
+    //     // PX4 odometry format w, x, y, z scalar part first
+    //     // ROS2 odometry format x, y, z, w scalar part last
+    //     tf2::Quaternion enu_q(msg->q[1], -msg->q[2], -msg->q[3], msg->q[0]);
+
+    //     // Rotation from NED to ENU: π/2 about Z, π about X
+    //     // tf2::Quaternion rot1, rot2;
+    //     // rot1.setRPY(0, 0, M_PI_2); // 90-degree rotation around Z
+    //     // rot2.setRPY(-M_PI_2, 0, 0);   // 180-degree rotation around X
+    //     // tf2::Quaternion enu_q = rot1 * rot2 * ned_q;
+    //     enu_q.normalize();
+
+    //     // tf2::Quaternion enu_q(msg->q[0], msg->q[1], -msg->q[2], -msg->q[3]);
+
+    //     enu_q_global = enu_q;
+    //     double roll, pitch, yaw;
+    //     tf2::Matrix3x3(enu_q_global).getRPY(roll, pitch, yaw);
+    //     current_yaw = yaw;
+    //     // Store converted values
+    //     _start_pos = enu_pos;
+    //     _start_vel = enu_vel;
+
+    //     std::cout<<"Start Pos is : "<<_start_pos[0]<<' ' <<_start_pos[1]<<' '<<_start_pos[2]<<std::endl;
+    //     std::cout<<"End Pos is : "<<_end_pos[0]<<' ' <<_end_pos[1]<<' '<<_end_pos[2]<<std::endl;
+
+    //     // Calculate time difference in seconds
+    //     auto current_time = rclcpp::Time(msg->timestamp);
+    //     auto del_t = (current_time - odom_time).seconds();
+
+    //     // Calculate acceleration if the time difference is non-zero
+    //     if (del_t > 0.0) {
+    //         _start_acc = (_start_vel - _last_vel) / del_t;
+    //     }
+
+    //     // Update the last velocity
+    //     _last_vel = _start_vel;
+
+    //     // Store the current timestamp for the next callback
+    //     odom_time = current_time;
+
+    //     // Check if the vehicle has arrived at the commit target
+    //     if (_rrtPathPlanner.getDis(_start_pos, _commit_target) < threshold) {
+    //         _is_target_arrive = true;
+    //     } else {
+    //         _is_target_arrive = false;
+    //     }
+
+    //     // Check if the vehicle has reached the end goal
+    //     if (_rrtPathPlanner.getDis(_start_pos, _end_pos) < 1) {
+    //         _is_complete = true;
+    //     }
+
+    //     // Check and handle safe trajectory (if any)
+    //     checkSafeTrajectory();
+
+    //     // Print debugging information
+    //     // std::cout << "[odom callback] distance to commit target: "
+    //     //           << _rrtPathPlanner.getDis(_start_pos, _commit_target) << std::endl;
+    //     std::cout << "[odom callback] current position " << _start_pos.transpose()
+    //               << " end position: " << _end_pos.transpose() << std::endl;
+    //     std::cout << "[odom callback] debugging distance issue: "
+    //               << (_start_pos - _end_pos).norm() << std::endl;
+    //     std::cout << "[odom callback] UAV speed: " << _start_vel.norm() << std::endl;
+    // }
 
     void rcvPointCloudCallBack(const sensor_msgs::msg::PointCloud2::SharedPtr pointcloud_msg)
     {
@@ -392,7 +444,7 @@ private:
         pcd_points.clear();
 
         pcd_points.reserve(cloud_input.points.size());
-        std::cout<<"[warning] input pointcloud size: "<<cloud_input.points.size()<<std::endl;
+        // std::cout<<"[warning] input pointcloud size: "<<cloud_input.points.size()<<std::endl;
         for (const auto& pt : cloud_input.points) 
         {
             pcd_points.emplace_back(pt.x, pt.y, pt.z);
@@ -1078,9 +1130,9 @@ private:
             auto t1 = std::chrono::steady_clock::now();
             // convexCover(corridor_points, convexCoverRange, 1.0e-6);
             // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-            convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+            // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
-            // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+            convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -1148,9 +1200,9 @@ private:
 
                 // convexCover(corridor_points, convexCoverRange, 1.0e-6);
                 // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-                convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
+                // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 // polygon_dilation(hpolys);
-                // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+                convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 
                 shortCut();
                 auto t2 = std::chrono::steady_clock::now();
@@ -1189,7 +1241,7 @@ private:
         }
         else
         {
-            // std::cout<<"[Incremental planner] in refine and evaluate loop"<<std::endl;
+            std::cout<<"[Incremental planner] in refine and evaluate loop"<<std::endl;
             auto time_start_ref = std::chrono::steady_clock::now();
             // Continue refining and evaluating the path
             _rrtPathPlanner.SafeRegionRefine(0.15);
@@ -1199,7 +1251,7 @@ private:
             // Get the updated path and publish it
             if(_rrtPathPlanner.getPathExistStatus())
             {
-                // std::cout<<"[Incremental planner] in refine and evaluate loop: Path updated"<<std::endl;
+                std::cout<<"[Incremental planner] in refine and evaluate loop: Path updated"<<std::endl;
                 std::tie(_path, _radius) = _rrtPathPlanner.getPath();
                 _path_vector = matrixToVector(_path);
             }
