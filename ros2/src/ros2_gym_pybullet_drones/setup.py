@@ -1,4 +1,6 @@
 from setuptools import setup
+from glob import glob
+import os
 
 package_name = 'ros2_gym_pybullet_drones'
 
@@ -10,7 +12,11 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'meshes'), glob('meshes/*.obj') + glob('meshes/*.dae')),
     ],
+    package_data={
+        package_name: ['meshes/*.obj', 'meshes/*.dae'],
+    },
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Jacopo Panerati',
@@ -30,6 +36,8 @@ setup(
             'trajectory_tracker = ros2_gym_pybullet_drones.vision_trajectory_tracker:main',
             'trajectory_generator = ros2_gym_pybullet_drones.trajectory_eg:main',
             'noise_gen = ros2_gym_pybullet_drones.noise_gen:main',
+            'model_publisher = ros2_gym_pybullet_drones.model_publisher:main',
+            'vision_360 = ros2_gym_pybullet_drones.vision_360:main',
 
         ],
     },

@@ -61,8 +61,8 @@ public:
         //      max_iter=1000, sample_portion=0.1, goal_portion=0.05)
 
         this->declare_parameter("safety_margin", 0.4);
-        this->declare_parameter("uav_radius", 0.3);
-        this->declare_parameter("search_margin", 0.2);
+        this->declare_parameter("uav_radius", 0.4);
+        this->declare_parameter("search_margin", 0.3);
         this->declare_parameter("max_radius", 2.0);
         this->declare_parameter("sample_range", 20.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -79,11 +79,11 @@ public:
         this->declare_parameter("y_h", 7.0);
         // this->declare_parameter("z_l", 1.0);
         this->declare_parameter("z_l2", 0.5);
-        this->declare_parameter("z_l", 0.8);
+        this->declare_parameter("z_l", 0.5);
 
         // this->declare_parameter("z_h", 1.0);
-        this->declare_parameter("z_h2", 2.0);
-        this->declare_parameter("z_h", 2.0);
+        this->declare_parameter("z_h2", 2.5);
+        this->declare_parameter("z_h", 2.5);
 
         this->declare_parameter("target_x", 0.0);   
         this->declare_parameter("target_y", 0.0);
@@ -147,7 +147,7 @@ public:
         _dest_pts_sub = this->create_subscription<nav_msgs::msg::Path>(
             "waypoints", 1, std::bind(&PointCloudPlanner::rcvWaypointsCallBack, this, std::placeholders::_1));
         _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "noisy_pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
+            "pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
         _odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom", 10, std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1));
 
@@ -220,7 +220,7 @@ private:
     int _max_samples;
     double _commit_distance = 6.0;
     double current_yaw = 0;
-    double max_vel = 0.5;
+    double max_vel = 1.0;
     float threshold = 0.8;
     int trajectory_id = 0;
     int order = 5;
@@ -228,8 +228,8 @@ private:
     float convexDecompTime = 0.05;
     float traj_gen_time = 0.1;
     // RRT Path Planner
-    // safeRegionRrtStar _rrtPathPlanner;
-    safeRegionRrtStarEllip _rrtPathPlanner;
+    safeRegionRrtStar _rrtPathPlanner;
+    // safeRegionRrtStarEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     Trajectory<5> _traj;
     super_planner::CIRI_e ciri_e;
@@ -251,7 +251,7 @@ private:
     float mass = 0.027000;
     float horizontal_drag_coeff = 0.000001;
     float vertical_drag_coeff = 0.000001;
-    float t2w = 2.250000;
+    float t2w = 2.5000;
     
     Eigen::MatrixXd _path;
     Eigen::VectorXd _radius;
@@ -288,8 +288,8 @@ private:
     // Initializing rrt parameters
     void setRRTPlannerParams()
     {
-        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation, _uav_radius);
-        // _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation);
+        // _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, uncertanity_compensation, _uav_radius);
+        _rrtPathPlanner.setParam(_safety_margin, _search_margin, _max_radius, _sample_range, 90, 90, false);
 
         _rrtPathPlanner.reset();
     }
@@ -691,7 +691,7 @@ private:
         std::vector<Eigen::Vector3d> bs;
         valid_pc.reserve(pcd_points.size());
         ciri.setupParams(_uav_radius, 4); // Setup CIRI with robot radius and iteration number
-        for (int i = 0; i < n;)
+        for (int i = 1; i < n;)
         {
 
             Eigen::Vector3d path_point = path[i];
@@ -1203,10 +1203,10 @@ private:
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
             // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-            convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+            // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
             // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
             // polygon_dilation(hpolys);
-            // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+            convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
             shortCut();
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -1273,10 +1273,10 @@ private:
                 auto t1 = std::chrono::steady_clock::now();
 
                 // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-                convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
+                // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
                 // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
                 // polygon_dilation(hpolys);
-                // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
+                convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
 
                 shortCut();
                 auto t2 = std::chrono::steady_clock::now();
@@ -1288,9 +1288,9 @@ private:
                 Eigen::Vector3d new_traj_start_acc{0.0, 0.0, 0.0};
                 if(1.25*(convexDecompTime + traj_gen_time) < _traj.getTotalDuration() - del_t)
                 {
-                    new_traj_start_pos = _traj.getPos(del_t + 1.25*(convexDecompTime + traj_gen_time));
-                    new_traj_start_vel = _traj.getVel(del_t + 1.25*(convexDecompTime + traj_gen_time));
-                    new_traj_start_acc = _traj.getAcc(del_t + 1.25*(convexDecompTime + traj_gen_time));
+                    new_traj_start_pos = _traj.getPos(del_t + 2.0*(convexDecompTime + traj_gen_time));
+                    new_traj_start_vel = _traj.getVel(del_t + 2.0*(convexDecompTime + traj_gen_time));
+                    new_traj_start_acc = _traj.getAcc(del_t + 2.0*(convexDecompTime + traj_gen_time));
                 }
 
                 convexDecompTime = elapsed;
@@ -1388,7 +1388,7 @@ private:
         if(!_is_traj_exist) return false;
         double T = max(0.0, delta_t);
         // std::cout<<"[safety debug] checking safe trajectory, delta t = "<<T<<std::endl;
-        for(double t = T; t < _traj.getTotalDuration()*0.60; t += 0.01)
+        for(double t = T; t < _traj.getTotalDuration()*0.50; t += 0.1)
         {
             auto pos_t = _traj.getPos(t);
             if(_rrtPathPlanner.checkTrajPtCol(pos_t))

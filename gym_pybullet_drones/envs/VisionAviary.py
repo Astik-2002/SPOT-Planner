@@ -31,6 +31,11 @@ class VisionAviary(BaseAviary):
                  output_folder='results',
                  environment_file = None,
                  dynamic_obs = False,
+                 static_obs = False,
+                 num_obstacles = 0,
+                 realistic = False,
+                 torus = False,
+                 deg360 = False
                  ):
         """Initialization of an aviary environment for control applications using vision.
 
@@ -68,10 +73,16 @@ class VisionAviary(BaseAviary):
 
         self.environment_file = environment_file
         self.is_dyn = dynamic_obs
+        self.static = static_obs
         self.obs = obstacles
         self.dynamic_obstacles = []
         self.near = 0.1
         self.far = 1000
+        self.num_obstacles = num_obstacles
+        self.realistic = realistic
+        self.is_torus = torus
+        self._360view = deg360
+        self.obstacle_ids = []
         super().__init__(drone_model=drone_model,
                          num_drones=num_drones,
                          neighbourhood_radius=neighbourhood_radius,
@@ -175,125 +186,31 @@ class VisionAviary(BaseAviary):
         adjacency_mat = self._getAdjacencyMatrix()
         obs = {}
         for i in range(self.NUM_DRONES):
-            if self.step_counter%self.IMG_CAPTURE_FREQ == 0:
+            if self._360view:
+                pcd = self._simulateLivoxMid360Lidar(i)
+                
+                obs[str(i)] = {"state": self._getDroneStateVector(i), \
+                    "neighbors": adjacency_mat[i,:], \
+                    "pcd": pcd, \
+                    }
+                
+            else:
                 self.rgb[i], self.dep[i], self.seg[i] = self._getDroneImages(i)
                 #### Printing observation to PNG frames example ############
                 if self.RECORD:
                     self._exportImage(img_type=ImageType.RGB, # ImageType.BW, ImageType.DEP, ImageType.SEG
-                                      img_input=self.rgb[i],
-                                      path=self.ONBOARD_IMG_PATH+"drone_"+str(i),
-                                      frame_num=int(self.step_counter/self.IMG_CAPTURE_FREQ)
-                                      )
-            obs[str(i)] = {"state": self._getDroneStateVector(i), \
-                           "neighbors": adjacency_mat[i,:], \
-                           "rgb": self.rgb[i], \
-                           "dep": self.dep[i], \
-                           "seg": self.seg[i] \
-                           }
+                                    img_input=self.rgb[i],
+                                    path=self.ONBOARD_IMG_PATH+"drone_"+str(i),
+                                    frame_num=int(self.step_counter/self.IMG_CAPTURE_FREQ)
+                                    )
+                obs[str(i)] = {"state": self._getDroneStateVector(i), \
+                            "neighbors": adjacency_mat[i,:], \
+                            "rgb": self.rgb[i], \
+                            "dep": self.dep[i], \
+                            "seg": self.seg[i] \
+                            }
         return obs
 
-    ################################################################################
-
-    def _pcd_generation(self,depth_image, rgb_image=None):
-
-        if depth_image.dtype != np.float32:
-            depth_image = depth_image.astype(np.float32)
-        
-        nearVal = self.L
-        farVal = 1000
-        clip_distance = 6
-        depth_mm = (2 * nearVal * farVal) / (farVal + nearVal - depth_image * (farVal - nearVal))
-        
-        height, width = depth_image.shape
-        aspect = width/height
-        fov = 90    
-        
-        fx = width / (2*np.tan(np.radians(fov / 2)))
-        fy = height / (2*np.tan(np.radians(fov / 2)))
-        cx = width/2
-        cy = height/2
-        s = 0
-        intrinsic_matrix = np.array([[fx, s, cx],
-                             [0, fy, cy],
-                             [0, 0, 1]])
-
-        intrinsic = o3d.camera.PinholeCameraIntrinsic()
-        intrinsic.intrinsic_matrix = intrinsic_matrix
-        # Extract drone state
-        drone_state = self._getDroneStateVector(0)
-        drone_position = drone_state[:3]  # The first three elements are the position
-        drone_orientation_quat = drone_state[3:7]  # The next four elements are the quaternion
-        # Create the extrinsic transformation matrix
-        depth_o3d = o3d.geometry.Image(depth_mm)
-        rot_mat = np.array(p.getMatrixFromQuaternion(drone_orientation_quat)).reshape(3, 3)
-        rotation_matrix = np.array(p.getMatrixFromQuaternion(drone_orientation_quat)).reshape(3, 3).T
-
-        # Construct the 4x4 transformation matrix (from drone frame to world frame)
-        drone_transform = np.eye(4)
-        # Apply the combined rotation to the extrinsic matrix
-        combined_rotation1 = np.array([
-            [0, 0, 1, 0],
-            [0, 1, 0, 0],
-            [-1, 0, 0, 0],
-            [0, 0, 0, 1]
-        ])
-        combined_rotation2 = np.array([
-            [1, 0, 0, 0],
-            [0, 0, 1, 0],
-            [0, -1, 0, 0],
-            [0, 0, 0, 1]
-        ])
-        drone_transform = combined_rotation2 @ combined_rotation1 @ drone_transform
-
-        # Invert the transformation matrix to get the extrinsic matrix
-        # This is because extrinsic matrix is world-to-drone frame
-        extrinsic = np.linalg.inv(drone_transform)
-        # extrinsic = self.get_extrinsics(extrinsic)
-        if rgb_image is not None:
-            rgb_o3d = o3d.geometry.Image(rgb_image.astype(np.uint8))  # Convert RGB to Open3D Image
-            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                rgb_o3d, depth_o3d)
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsic, extrinsic)
-        else:
-            pcd = o3d.geometry.PointCloud.create_from_depth_image(depth_o3d, intrinsic, extrinsic)
-        
-        # distances = np.linalg.norm(np.asarray(pcd.points), axis=1)
-        # indices = np.where((distances <= clip_distance))[0]
-        # pcd = pcd.select_by_index(indices)
-        return pcd
-    
-    ################################################################################
-    
-    def get_extrinsics(self, view_matrix):
-        Tc = np.array([[1,  0,  0,  0],
-                    [0,  -1,  0,  0],
-                    [0,  0,  -1,  0],
-                    [0,  0,  0,  1]]).reshape(4,4)
-        T = np.linalg.inv(view_matrix) @ Tc
-
-        return T
-
-    ################################################################################
-
-    def _occupancy_generation(self,depth_image):
-        point_cloud = self._pcd_generation(depth_image)
-        voxel_size = 0.1  # Set voxel size as per requirement
-        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(point_cloud, voxel_size=voxel_size)
-
-        # Step 4: Create the occupancy grid
-        min_bound = voxel_grid.get_min_bound()
-        max_bound = voxel_grid.get_max_bound()
-        grid_size = np.ceil((max_bound - min_bound) / voxel_size).astype(int)
-        voxels = voxel_grid.get_voxels()
-        voxel_indices = np.array([v.grid_index for v in voxels])
-        occupancy_grid = np.zeros(grid_size, dtype=bool)
-        for idx in voxel_indices:
-            occupancy_grid[idx[0], idx[1], idx[2]] = True
-
-        # Optional: Save the occupancy grid
-        #np.save("occupancy_grid.npy", occupancy_grid)
-        print("Occupancy grid created and saved successfully.")
-        return occupancy_grid
 
     ################################################################################
 
@@ -392,84 +309,73 @@ class VisionAviary(BaseAviary):
         # Call the parent class _addObstacles (if needed)
         # super()._addObstacles()
         if self.is_dyn:
-            self._addDynamicObstacles(num_obstacles=10)
-        less = False
-        if not less:
-            num_trees= 80
-            x_bounds=(0.5, 55.5)
-            y_bounds=(-7.0, 7.0)
+            self._addDynamicObstacles(num_obstacles=self.num_obstacles)
+        if self.static:
+            less = False
+            if not less:
+                num_trees= 80
+                x_bounds=(0.5, 55.5)
+                y_bounds=(-7.0, 7.0)
+                
+                base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
+                tree_urdf = os.path.join(base_path, "simple_tree.urdf")
+                realistic_tree_urdfs = [os.path.join(base_path, "realistic_tree1.urdf"), os.path.join(base_path, "realistic_tree2.urdf"), os.path.join(base_path, "realistic_tree3.urdf"),
+                                        os.path.join(base_path, "realistic_tree4.urdf"), os.path.join(base_path, "realistic_tree5.urdf"), os.path.join(base_path, "realistic_tree6.urdf")]
+                np.random.seed(42)
+                output_dir = "/home/astik/gym-pybullet-drones/gym_pybullet_drones/envs/obstacle_pos"
+                if self.environment_file:
+                    csv_file = os.path.join(output_dir, self.environment_file)
+                    try:
+                        with open(csv_file, newline="") as f:
+                            reader = csv.reader(f)
+                            # Skip header row if present
+                            next(reader, None)
+                            print("[vision aviary debug] loaded environment: ",csv_file)
+                            for row in reader:
+                                if len(row) < 4:
+                                    continue
+                                tree_id = row[0]
+                                x_pos = float(row[1])
+                                y_pos = float(row[2])
+                                z_pos = float(row[3])
+                                pos = (x_pos, y_pos, z_pos)
+                                # print(f"Tree {tree_id} at position {pos}")
+                                if self.realistic:
+                                    tree_urdf = realistic_tree_urdfs[random.randint(0, 5)]
+                                if os.path.exists(tree_urdf):
+                                    p.loadURDF(tree_urdf,
+                                            pos,
+                                            p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
+                                            useFixedBase=True,
+                                            physicsClientId=self.CLIENT)
+                                else:
+                                    print(f"File not found: {tree_urdf}")
+                    except Exception as e:
+                        print(f"Error reading {csv_file}: {e}")
             
-            base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
-            tree_urdf = os.path.join(base_path, "simple_tree.urdf")
-            np.random.seed(42)
-            # Add trees randomly within the specified bounds
-            # for _ in range(num_trees):
-            #     # Generate random x and y coordinates within the specified bounds
-            #     x_pos = random.uniform(x_bounds[0], x_bounds[1])
-            #     y_pos = random.uniform(y_bounds[0], y_bounds[1])
-
-            #     # Randomly place the tree at this location, z is fixed (0 for ground level)
-            #     pos = (x_pos, y_pos, 0.0)
-
-            #     # Load the tree URDF at the generated position
-            #     if os.path.exists(tree_urdf):
-            #         p.loadURDF(tree_urdf,
-            #                 pos,
-            #                 p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
-            #                 useFixedBase=True,
-            #                 physicsClientId=self.CLIENT)
-            #     else:
-            #         print(f"File not found: {tree_urdf}")
-            output_dir = "/home/astik/gym-pybullet-drones/gym_pybullet_drones/envs/obstacle_pos"
-            if self.environment_file:
-                csv_file = os.path.join(output_dir, self.environment_file)
-                try:
-                    with open(csv_file, newline="") as f:
-                        reader = csv.reader(f)
-                        # Skip header row if present
-                        next(reader, None)
-                        print("[vision aviary debug] loaded environment: ",csv_file)
-                        for row in reader:
-                            if len(row) < 4:
-                                continue
-                            tree_id = row[0]
-                            x_pos = float(row[1])
-                            y_pos = float(row[2])
-                            z_pos = float(row[3])
-                            pos = (x_pos, y_pos, z_pos)
-                            # print(f"Tree {tree_id} at position {pos}")
-                            if os.path.exists(tree_urdf):
-                                p.loadURDF(tree_urdf,
-                                        pos,
-                                        p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
-                                        useFixedBase=True,
-                                        physicsClientId=self.CLIENT)
-                            else:
-                                print(f"File not found: {tree_urdf}")
-                except Exception as e:
-                    print(f"Error reading {csv_file}: {e}")
-        
-        else:
-            base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
-            tree_urdf = os.path.join(base_path, "simple_tree.urdf")
-            pos = (0.5, 0, 0)
-            if os.path.exists(tree_urdf):
-                    p.loadURDF(tree_urdf,
-                            pos,
-                            p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
-                            useFixedBase=True,
-                            physicsClientId=self.CLIENT)
             else:
-                print(f"File not found: {tree_urdf}")
+                base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
+                tree_urdf = os.path.join(base_path, "simple_tree.urdf")
+                pos = (0.5, 0, 0)
+                if os.path.exists(tree_urdf):
+                        tree_id = p.loadURDF(tree_urdf,
+                                pos,
+                                p.getQuaternionFromEuler([0, 0, 0]),  # No rotation
+                                useFixedBase=True,
+                                physicsClientId=self.CLIENT)
+                        self.obstacle_ids.append(tree_id)
+
+                else:
+                    print(f"File not found: {tree_urdf}")
 
 
-    def _addDynamicObstacles(self, num_obstacles=1, x_bounds=(0, 10), y_bounds=(-10, 10), velocity_range=(-1, 1)):
+    def _addDynamicObstacles(self, num_obstacles=1, x_bounds=(2, 22), y_bounds=(-10, 10), velocity_range=(-0.35, 0.35)):
         """Adds dynamic obstacles that move with velocity profiles."""
         base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
         obstacle_urdf = os.path.join(base_path, "red_cylinder.urdf")
-        for _ in range(num_obstacles):
+        torus_urdf = os.path.join(base_path, "torus.urdf")
+        for i in range(num_obstacles):
             # Generate random initial positions within bounds
-            
             x_pos = np.random.uniform(x_bounds[0], x_bounds[1])
             y_pos = np.random.uniform(y_bounds[0], y_bounds[1])
             z_pos = 0.5  # Fixed height for the obstacles
@@ -477,51 +383,107 @@ class VisionAviary(BaseAviary):
 
             # Generate random velocity components
             velocity = [
-                np.random.uniform(velocity_range[0], velocity_range[1]),
-                np.random.uniform(velocity_range[0], velocity_range[1]),
-                0.0  # Obstacles move in the XY plane only
+            np.random.uniform(velocity_range[0], velocity_range[1]),
+            np.random.uniform(velocity_range[0], velocity_range[1]),
+            0.0  # Obstacles move in the XY plane only
             ]
 
-            if os.path.exists(obstacle_urdf):
-                obstacle_id = p.loadURDF(obstacle_urdf,
-                                         pos,
-                                         p.getQuaternionFromEuler([0, 0, 0]),
-                                         useFixedBase=False,
-                                         physicsClientId=self.CLIENT)
+            # Decide URDF based on is_torus and 30% probability
+            type_obs = 0
+            if self.is_torus and np.random.rand() < 0.3:
+                urdf_to_use = torus_urdf
+                type_obs = 1
+            else:
+                urdf_to_use = obstacle_urdf
+
+            if os.path.exists(urdf_to_use):
+                obstacle_id = p.loadURDF(urdf_to_use,
+                         pos,
+                         p.getQuaternionFromEuler([0, 0, 0]),
+                         useFixedBase=False,
+                         physicsClientId=self.CLIENT)
                 self.dynamic_obstacles.append({
                     "pos": pos,
                     "id": obstacle_id,
-                    "velocity": velocity
+                    "velocity": velocity,
+                    "type":type_obs
                 })
+                self.obstacle_ids.append(obstacle_id)
             else:
-                print(f"File not found: {obstacle_urdf}")
+                print(f"File not found: {urdf_to_use}")
 
-    def _updateDynamicObstacles(self):
+    def _updateDynamicObstacles(self, range_x = [2, 22], range_y = [-10, 10]):
         """Updates the positions of dynamic obstacles based on their velocities."""
-        # print("[vision aviary debug] obstacle position update called")
         for obstacle in self.dynamic_obstacles:
             obstacle_id = obstacle["id"]
             velocity = obstacle["velocity"]
 
             # Get the current position of the obstacle
             pos, _ = p.getBasePositionAndOrientation(obstacle_id, physicsClientId=self.CLIENT)
-            new_pos = [pos[0] + velocity[0] / self.SIM_FREQ,
-                       pos[1] + velocity[1] / self.SIM_FREQ,
-                       pos[2] + velocity[2] / self.SIM_FREQ]
-            if new_pos[0] < 0 or new_pos[0] > 50:
-                obstacle["velocity"][0] = -velocity[0]
-                new_pos[0] = pos[0] + obstacle["velocity"][0] / self.SIM_FREQ
-            if new_pos[1] < -25 or new_pos[1] > 25:
-                obstacle["velocity"][1] = -velocity[1]
-                new_pos[1] = pos[1] + obstacle["velocity"][1] / self.SIM_FREQ
-            # print("obstacle id: ", obstacle_id, " position: ",new_pos)
+            vx, vy, vz = obstacle["velocity"]
+            
+            # Calculate proposed new position
+            new_pos = [pos[0] + vx / self.SIM_FREQ,
+                    pos[1] + vy / self.SIM_FREQ,
+                    pos[2] + vz / self.SIM_FREQ]
+            
+            # Define your boundaries (adjust these values as needed)
+            x_min, x_max = range_x[0], range_x[1]
+            y_min, y_max = range_y[0], range_y[1]
+            
+            # Check for boundary collisions and handle bouncing
+            bounced = False
+            
+            # X-axis boundary check
+            if new_pos[0] < x_min:
+                new_pos[0] = x_min + (x_min - new_pos[0])  # Reflect the overshoot
+                vx = -vx
+                bounced = True
+            elif new_pos[0] > x_max:
+                new_pos[0] = x_max - (new_pos[0] - x_max)  # Reflect the overshoot
+                vx = -vx
+                bounced = True
+                
+            # Y-axis boundary check
+            if new_pos[1] < y_min:
+                new_pos[1] = y_min + (y_min - new_pos[1])  # Reflect the overshoot
+                vy = -vy
+                bounced = True
+            elif new_pos[1] > y_max:
+                new_pos[1] = y_max - (new_pos[1] - y_max)  # Reflect the overshoot
+                vy = -vy
+                bounced = True
+                
+            # Update velocity if bounced
+            if bounced:
+                obstacle["velocity"] = [vx, vy, vz]
+            
             # Set the new position of the obstacle
             p.resetBasePositionAndOrientation(obstacle_id,
-                                              new_pos,
-                                              p.getQuaternionFromEuler([0, 0, 0]),
-                                              physicsClientId=self.CLIENT)
+                                            new_pos,
+                                            p.getQuaternionFromEuler([0, 0, 0]),
+                                            physicsClientId=self.CLIENT)
             obstacle["pos"] = new_pos
-
+    
+    def _checkCollision(self, drone_id):
+        """Check if drone collides with obstacles or ground."""
+        # Get drone position and closest obstacle
+        drone_pos = self.pos[drone_id]
+        drone_body_id = self.DRONE_IDS[drone_id]
+        
+        # Check ground collision (z-coordinate)
+        if drone_pos[2] < self.collision_threshold:
+            return True
+        
+        # Check obstacle collisions
+        contact_points = p.getContactPoints(
+            bodyA=drone_body_id,
+            physicsClientId=self.CLIENT
+        )
+        for contact in contact_points:
+            if contact[2] in self.obstacle_ids:  # contact[2] = bodyB ID
+                return True
+        return False
     # def _addObstacles(self):
     #     """Add obstacles to the environment, including multiple cylinders of different colors at fixed positions."""
     #     super()._addObstacles()

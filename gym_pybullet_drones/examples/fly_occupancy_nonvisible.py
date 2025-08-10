@@ -11,7 +11,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from gym_pybullet_drones.utils.enums import DroneModel, Physics
 from gym_pybullet_drones.envs.CtrlAviary import CtrlAviary
 from gym_pybullet_drones.envs.VisionAviary import VisionAviary
-from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
+from gym_pybullet_drones.control.DSLPIDControl_bkup import DSLPIDControl
 from gym_pybullet_drones.control.SimplePIDControl import SimplePIDControl
 from gym_pybullet_drones.utils.Logger import Logger
 from gym_pybullet_drones.utils.utils import sync, str2bool
@@ -158,9 +158,6 @@ def run(
         ### Printout and plot images #############################
         if i % env.SIM_FREQ == 0:
             env.render()
-            if vision:
-                for j in range(num_drones):
-                    occupancy_grid = env._occupancy_generation(obs[str(j)]["dep"])
         #             if num_drones > 1:
         #                 # depth_axs[j].imshow(obs[str(j)]["dep"], cmap='plasma')
         #                 # depth_axs[j].set_title(f'Drone {j} Depth Image')

@@ -306,7 +306,7 @@ class BaseAviary(gym.Env):
                 rot_mat = np.array(p.getMatrixFromQuaternion(self.quat[0, :])).reshape(3, 3)
                 #### Set target point, camera view and projection matrices #
                 target = np.dot(rot_mat,np.array([0, 0, 0.1])) + np.array(self.pos[0, :])
-                camera_distance = 0.5
+                camera_distance = 1.0
                 camera_yaw = -90
                 camera_pitch = -30
                 p.resetDebugVisualizerCamera(cameraDistance=camera_distance,
@@ -601,7 +601,7 @@ class BaseAviary(gym.Env):
         rot_mat = np.array(p.getMatrixFromQuaternion(self.quat[nth_drone, :])).reshape(3, 3)
         #### Set target point, camera view and projection matrices #
         target = np.dot(rot_mat,np.array([1000, 0, 0])) + np.array(self.pos[nth_drone, :])
-        DRONE_CAM_VIEW = p.computeViewMatrix(cameraEyePosition=self.pos[nth_drone, :]+np.array([0, 0, 0.1+self.L]),
+        DRONE_CAM_VIEW = p.computeViewMatrix(cameraEyePosition=self.pos[nth_drone, :]+np.dot(rot_mat, np.array([0.0, 0, 0.4])),
                                              cameraTargetPosition=target,
                                              cameraUpVector=[0, 0, 1],
                                              physicsClientId=self.CLIENT
@@ -624,6 +624,156 @@ class BaseAviary(gym.Env):
         dep = np.reshape(dep, (h, w))
         seg = np.reshape(seg, (h, w))
         return rgb, dep, seg
+
+        ################################################################################
+
+    def _get360DroneImages(self,
+                            nth_drone,
+                            segmentation: bool=True
+                            ):
+        """Returns camera captures from the n-th drone POV in 4 directions (front, right, back, left).
+
+        Parameters
+        ----------
+        nth_drone : int
+            The ordinal number/position of the desired drone in list self.DRONE_IDS.
+        segmentation : bool, optional
+            Whether to compute the segmentation mask. It affects performance.
+
+        Returns
+        -------
+        list of ndarray
+            Each element is a tuple (rgb, dep, seg) for one direction.
+            rgb: (h, w, 4)-shaped array of uint8's containing the RGBA image.
+            dep: (h, w)-shaped array of uint8's containing the depth image.
+            seg: (h, w)-shaped array of uint8's containing the segmentation image.
+            The order is [front, right, back, left].
+        """
+        if self.IMG_RES is None:
+            print("[ERROR] in BaseAviary._get360DroneImages(), remember to set self.IMG_RES to np.array([width, height])")
+            exit()
+        rot_mat = np.array(p.getMatrixFromQuaternion(self.quat[nth_drone, :])).reshape(3, 3)
+        directions = [
+            np.array([1000, 0, 0]),    # front
+            np.array([0, 1000, 0]),    # right
+            np.array([-1000, 0, 0]),   # back
+            np.array([0, -1000, 0])    # left
+        ]
+        camera_offsets = [
+                (0.3, 0.0, 0.0),    # Front (x+)
+                (0.0, 0.3, 0.0),   # Right (y-)
+                (-0.3, 0.0, 0.0),   # Back (x-)
+                (0.0, -0.3, 0.0)     # Left (y+)
+            ]
+        results = []
+        for i in range(0, len(directions)):
+            dir_vec = directions[i]
+            offset = np.dot(rot_mat, camera_offsets[i])
+            target = np.dot(rot_mat, dir_vec) + np.array(self.pos[nth_drone, :])
+            DRONE_CAM_VIEW = p.computeViewMatrix(
+                cameraEyePosition=self.pos[nth_drone, :] + offset,
+                cameraTargetPosition=target,
+                cameraUpVector=[0, 0, 1],
+                physicsClientId=self.CLIENT
+            )
+            DRONE_CAM_PRO = p.computeProjectionMatrixFOV(
+                fov=90.0,
+                aspect=self.VID_WIDTH/self.VID_HEIGHT,
+                nearVal=self.L,
+                farVal=1000.0
+            )
+            SEG_FLAG = p.ER_SEGMENTATION_MASK_OBJECT_AND_LINKINDEX if segmentation else p.ER_NO_SEGMENTATION_MASK
+            [w, h, rgb, dep, seg] = p.getCameraImage(
+                width=self.IMG_RES[0],
+                height=self.IMG_RES[1],
+                shadow=1,
+                viewMatrix=DRONE_CAM_VIEW,
+                projectionMatrix=DRONE_CAM_PRO,
+                flags=SEG_FLAG,
+                physicsClientId=self.CLIENT
+            )
+            dep = np.reshape(dep, (h, w))
+            results.append(dep)
+        return results
+    
+    ################################################################################
+
+    # def _simulateLivoxMid360Lidar(self, nth_drone, vertical_fov_deg=90, horizontal_fov_deg=360, max_distance=10, vertical_res=20):
+    #     # Pose and orientation
+    #     pos = self.pos[nth_drone, :]
+    #     quat = self.quat[nth_drone, :]
+    #     rot_mat = np.array(p.getMatrixFromQuaternion(quat)).reshape(3, 3)
+    #     lidar_offset = np.array([0.0, 0.0, 0.2])
+    #     lidar_pos = pos + rot_mat @ lidar_offset
+
+    #     # Angle grids
+    #     horizontal_res = int(horizontal_fov_deg)
+    #     vertical_angles = np.linspace(-vertical_fov_deg/2, vertical_fov_deg/2, vertical_res) * np.pi / 180
+    #     horizontal_angles = np.linspace(-horizontal_fov_deg/2, horizontal_fov_deg/2, horizontal_res, endpoint=False) * np.pi / 180
+    #     V, H = np.meshgrid(vertical_angles, horizontal_angles, indexing='ij')
+
+    #     # Vectorized direction computation
+    #     x = np.cos(V) * np.cos(H)
+    #     y = np.cos(V) * np.sin(H)
+    #     z = np.sin(V)
+    #     directions = np.stack([x, y, z], axis=-1).reshape(-1, 3)
+
+    #     # ray_from at origin in lidar frame, ray_to is direction * max_distance
+    #     ray_from = np.zeros_like(directions)
+    #     ray_to = directions * max_distance
+
+    #     # Transform to world frame (rotation + translation)
+    #     ray_from_world = (ray_from @ rot_mat.T) + lidar_pos
+    #     ray_to_world = (ray_to @ rot_mat.T) + lidar_pos
+
+    #     # Ray cast in batch
+    #     results = p.rayTestBatch(ray_from_world, ray_to_world)
+
+    #     # Vectorized hit point extraction
+    #     hit_points = np.array([res[3] if res[2] < 1.0 else [0.0, 0.0, 0.0] for res in results])
+    #     valid_points = hit_points[~np.all(hit_points == 0.0, axis=1)]
+
+    #     return valid_points
+    def _simulateLivoxMid360Lidar(self, nth_drone, vertical_fov_up = 30.0, vertical_fov_down = -30.0, horizontal_fov_deg=360, max_distance=5.0, vertical_res=20):
+        # Cache direction vectors if resolution/FOV don't change
+        if not hasattr(self, '_lidar_directions_cache'):
+            vertical_angles = np.linspace(vertical_fov_down, vertical_fov_up, vertical_res) * np.pi / 180
+            horizontal_res = int(horizontal_fov_deg)
+            horizontal_angles = np.linspace(-horizontal_fov_deg/2, horizontal_fov_deg/2, horizontal_res, endpoint=False) * np.pi / 180
+            V, H = np.meshgrid(vertical_angles, horizontal_angles, indexing='ij')
+            x = np.cos(V) * np.cos(H)
+            y = np.cos(V) * np.sin(H)
+            z = np.sin(V)
+            self._lidar_directions_cache = np.stack([x, y, z], axis=-1).reshape(-1, 3).astype(np.float32)
+
+        directions = self._lidar_directions_cache
+
+        # Pose and transform
+        pos = self.pos[nth_drone].astype(np.float32)
+        quat = self.quat[nth_drone]
+        rot_mat = np.array(p.getMatrixFromQuaternion(quat), dtype=np.float32).reshape(3, 3)
+        lidar_offset = np.array([0.0, 0.0, 0.4], dtype=np.float32)
+        lidar_pos = pos + rot_mat @ lidar_offset
+
+        # Transform directions
+        ray_from = np.zeros_like(directions)
+        ray_to = directions * max_distance
+        ray_from_world = (ray_from @ rot_mat.T) + lidar_pos
+        ray_to_world = (ray_to @ rot_mat.T) + lidar_pos
+
+        # Ray cast
+        results = p.rayTestBatch(ray_from_world, ray_to_world)
+
+        # Fast hit extraction
+        hit_fractions = np.array([r[2] for r in results])
+        hit_positions = np.array([r[3] for r in results], dtype=np.float32)
+
+        # Mask for valid hits and z ≠ 0
+        valid_mask = (hit_fractions < 1.0) & (hit_positions[:, 2] != 0.0)
+        hit_points = hit_positions[valid_mask]
+
+        return hit_points
+
 
     ################################################################################
 

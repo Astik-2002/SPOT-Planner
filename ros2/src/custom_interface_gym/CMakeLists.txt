@@ -12,6 +12,7 @@ find_package(rosidl_default_generators REQUIRED)  # For message and service gene
 find_package(geometry_msgs REQUIRED)  # Include dependencies used in messages
 find_package(std_msgs REQUIRED)
 find_package(geographic_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 # Define custom messages and services
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -20,7 +21,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BoundingBoxArray.msg"
   "msg/DynamicBbox.msg"
   "msg/DesTrajectory.msg"
-  DEPENDENCIES geometry_msgs std_msgs geographic_msgs  # Specify dependencies
+  "msg/ImageArray.msg"
+  "msg/PcdArray.msg"
+  DEPENDENCIES geometry_msgs std_msgs geographic_msgs sensor_msgs # Specify dependencies
 )
 
 # Testing and linting

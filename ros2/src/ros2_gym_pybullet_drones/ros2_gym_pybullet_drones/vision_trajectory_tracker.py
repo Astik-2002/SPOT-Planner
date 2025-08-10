@@ -32,11 +32,11 @@ from nav_msgs.msg import Odometry
 from gym_pybullet_drones.utils.enums import DroneModel, Physics
 from gym_pybullet_drones.envs.VisionAviary import VisionAviary
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
+from custom_interface_gym.msg import BoundingBoxArray, DynamicBbox
 
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 from custom_interface_gym.msg import TrajMsg
-from custom_interface_gym.msg import BoundingBoxArray, DynamicBbox
 import csv, math
 
 
@@ -47,33 +47,38 @@ class AviaryWrapper(Node):
         super().__init__('aviary_wrapper')
         self.step_cb_count = 0
         self.get_action_cb_count = 0
-        timer_freq_hz = 400
-        timer_period_sec = 1/timer_freq_hz
+        self.timer_freq_hz = 50
+        timer_period_sec = 1/self.timer_freq_hz
         self.R = 0.0
         self.H = 0.8
         self.INIT_XYZS = np.array([[0.0, self.R, self.H]])
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
-        self.goal_pos = np.array([[50.0, 0.0, 1.5]]).flatten()
-        self.is_dyn = True
-        self.env = VisionAviary(drone_model=DroneModel.CF2X,
+        self.goal_pos = np.array([[30.0, 0.0, 1.5]]).flatten()
+        self.lidar = True
+        self.is_dynamic = True
+        self.is_static = False
+        self.env = VisionAviary(drone_model=DroneModel.MANTIS,
                            num_drones=1,
                            initial_xyzs=self.INIT_XYZS,
                            initial_rpys=self.INIT_RPYS,
                            physics=Physics.PYB,
                            neighbourhood_radius=np.inf,
-                           freq=timer_freq_hz,
+                           freq=self.timer_freq_hz,
                            aggregate_phy_steps=1,
-                           gui=True,
+                           gui=False,
                            record=False,
                            obstacles=True,
+                           dynamic_obs = self.is_dynamic,
+                           static_obs = self.is_static,
+                           num_obstacles = 20,
+                           deg360=self.lidar,
                            user_debug_gui=False,
-                           environment_file="environment_41.csv",
-                           dynamic_obs=self.is_dyn
+                           environment_file="environment_31.csv"
                            )
         #### Initialize an action with the RPMs at hover ###########
         self.action = np.ones(4)*self.env.HOVER_RPM
-        self.ctrl = DSLPIDControl(drone_model=DroneModel.CF2X)
+        self.ctrl = DSLPIDControl(drone_model=DroneModel.MANTIS)
 
         #### Declare publishing on 'obs' and create a timer to call 
         #### action_callback every timer_period_sec ################
@@ -84,7 +89,6 @@ class AviaryWrapper(Node):
         self.rgb_pub = self.create_publisher(Image,'rgb_image',1)
         self.goal_pub = self.create_publisher(Path,'waypoints',1)
         self.seg_pub = self.create_publisher(Image,'segmentation_image',1)
-        self.dyn_obs_pub = self.create_publisher(BoundingBoxArray, 'dynamic_obs_state', 1)
         self.log_set = False
         self.bridge = CvBridge()
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -92,6 +96,8 @@ class AviaryWrapper(Node):
         #### Subscribe to topic 'waypoints' ###########################
         # self.wp_subs = self.create_subscription(Path, 'rrt_waypoints', self.get_waypoint_callback, 1)
         self.traj_subs = self.create_subscription(TrajMsg,'rrt_command', self.get_trajectory_callback, 1)
+        self.dyn_obs_pub = self.create_publisher(BoundingBoxArray, 'dynamic_obs_state', 1)
+        self._is_vis_active = True
         self.pos = self.INIT_XYZS.flatten()
         self.waypoints = []
         self.prev_wp = []
@@ -108,15 +114,16 @@ class AviaryWrapper(Node):
         self.prev_yaw = 0.0  # Previous yaw value for rate calculation
 
         self.marker_pub = self.create_publisher(MarkerArray, '/trajectory_marker_array', 10)
+        self.dynamic_obs_marker_pub = self.create_publisher(MarkerArray, '/dynamic_boundingboxes', 10)
 
         # Call a timer to publish the marker array at a lower rate than the main loop
-        self.trajectory_timer = self.create_timer(1.0, self.publish_trajectory)
+        # self.trajectory_timer = self.create_timer(1.0, self.publish_trajectory)
         self.is_goal_sent = False
         self.is_hover_pos_set = False
         self.des_pos = self.INIT_XYZS.flatten()
         self.hover_pos = self.INIT_XYZS.flatten()
         self.des_vel = np.zeros(3)
-        self.dynamic_obstacles = []
+        self.counter = 0
 
     
     def publish_trajectory(self):
@@ -155,6 +162,66 @@ class AviaryWrapper(Node):
 
         # Publish the MarkerArray
         self.marker_pub.publish(marker_array)
+
+    def publish_dynamic_states(self):
+        self.dynamic_obstacles = self.env.dynamic_obstacles
+        bbox_arr = BoundingBoxArray()
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = "ground_link"
+
+        marker_array = MarkerArray()
+
+        for i, obs in enumerate(self.dynamic_obstacles):
+            bbox = DynamicBbox()
+            pos = obs["pos"]
+            d_obs = np.linalg.norm(pos - self.pos)
+            if d_obs < 5.0:
+                vel = obs["velocity"]
+                bbox.center_x = pos[0]
+                bbox.center_y = pos[1]
+                bbox.center_z = 2.5
+
+                bbox.velocity_x = vel[0]
+                bbox.velocity_y = vel[1]
+                bbox.velocity_z = vel[2]
+
+                bbox.height = 5.0
+                bbox.width = 1.0
+                bbox.length = 1.0
+
+                bbox_arr.boxes.append(bbox)
+
+            if self._is_vis_active:
+                marker = Marker()
+                marker.header = header
+                marker.ns = "dynamic_obstacles"
+                marker.id = i
+                marker.type = Marker.CUBE
+                marker.action = Marker.ADD
+                marker.pose.position.x = pos[0]
+                marker.pose.position.y = pos[1]
+                marker.pose.position.z = pos[2]
+                marker.pose.orientation.x = 0.0
+                marker.pose.orientation.y = 0.0
+                marker.pose.orientation.z = 0.0
+                marker.pose.orientation.w = 1.0
+                marker.scale.x = 1.0
+                marker.scale.y = 1.0
+                marker.scale.z = 5.0
+                marker.color.a = 0.5  # Transparent
+                if d_obs < 5.0:
+                    marker.color.r = 1.0
+                    marker.color.g = 0.0
+                else:
+                    marker.color.r = 0.0
+                    marker.color.g = 1.0
+                marker.color.b = 0.0
+                marker_array.markers.append(marker)
+                self.marker_pub.publish(marker_array)
+
+        bbox_arr.header = header
+        self.dyn_obs_pub.publish(bbox_arr)
 
     def broadcast_transform(self, x,y,z,qx,qy,qz,qw, frame_name, parent_name):
         # Assuming you have the drone's position and orientation as (x, y, z) and (qx, qy, qz, qw)
@@ -221,43 +288,73 @@ class AviaryWrapper(Node):
 
 
         self.publisher_.publish(msg)
-        if self.is_dyn:
-            self.publish_dynamic_states()
-        depth_image = obs["0"]["dep"]
-        rgb_image = obs["0"]["rgb"]
-        seg_image = obs["0"]["seg"]
-        
-        if depth_image.dtype != np.float32:
-            depth_image = depth_image.astype(np.float32)
+        if self.counter % 10 == 0:
+            if self.lidar:
+                pcd = obs["0"]["pcd"]
+                points = obs["0"]["pcd"]
+                # points = points[~np.all(points == 0, axis=1)]
+                msg = PointCloud2()
+                msg.header = Header()
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.header.frame_id = "ground_link"
+                
+                if len(points) > 0:
+                    # Define the point fields (x, y, z)
+                    msg.fields = [
+                        PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+                        PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+                        PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1)
+                    ]
+                    msg.height = 1
+                    msg.width = len(points)
+                    msg.point_step = 12  # 3 floats (4 bytes each)
+                    msg.row_step = msg.point_step * msg.width
+                    msg.is_bigendian = False
+                    msg.is_dense = True
+                    
+                    # Convert points to bytes
+                    msg.data = np.asarray(points, dtype=np.float32).tobytes() 
+                self.pcd_pub.publish(msg)
+            else:
+                depth_image = obs["0"]["dep"]
+                rgb_image = obs["0"]["rgb"]
+                seg_image = obs["0"]["seg"]
 
-        if rgb_image.dtype != np.float32:
-            rgb_image = rgb_image.astype(np.float32)
-        
-        if seg_image.dtype != np.float32:
-            seg_image = seg_image.astype(np.float32)
-        
-        rgb_image_3ch = rgb_image[:, :, :3]
-        rgb_image_8uc3 = cv2.convertScaleAbs(rgb_image_3ch, alpha=(255.0/rgb_image_3ch.max()))
-        gray_image = cv2.cvtColor(rgb_image_8uc3, cv2.COLOR_RGB2GRAY)
-        # Convert the depth image to a ROS Image message
-        ros_dep_image = self.bridge.cv2_to_imgmsg(depth_image, encoding='32FC1')
-        ros_rgb_image = self.bridge.cv2_to_imgmsg(rgb_image_8uc3, encoding='rgb8')
-        #ros_gray_image = self.bridge.cv2_to_imgmsg(gray_image, encoding='mono8')
+                if depth_image.dtype != np.float32:
+                    depth_image = depth_image.astype(np.float32)
 
-        ros_seg_image = self.bridge.cv2_to_imgmsg(seg_image, encoding='32FC1')
-        self.dep_pub.publish(ros_dep_image)
-        self.rgb_pub.publish(ros_rgb_image)
-        self.seg_pub.publish(ros_seg_image)
+                if rgb_image.dtype != np.float32:
+                    rgb_image = rgb_image.astype(np.float32)
+                
+                if seg_image.dtype != np.float32:
+                    seg_image = seg_image.astype(np.float32)
+                
+                rgb_image_3ch = rgb_image[:, :, :3]
+                rgb_image_8uc3 = cv2.convertScaleAbs(rgb_image_3ch, alpha=(255.0/rgb_image_3ch.max()))
+                gray_image = cv2.cvtColor(rgb_image_8uc3, cv2.COLOR_RGB2GRAY)
+                # Convert the depth image to a ROS Image message
+                ros_dep_image = self.bridge.cv2_to_imgmsg(depth_image, encoding='32FC1')
+                ros_rgb_image = self.bridge.cv2_to_imgmsg(rgb_image_8uc3, encoding='rgb8')
+                #ros_gray_image = self.bridge.cv2_to_imgmsg(gray_image, encoding='mono8')
+
+                ros_seg_image = self.bridge.cv2_to_imgmsg(seg_image, encoding='32FC1')
+                self.dep_pub.publish(ros_dep_image)
+                self.rgb_pub.publish(ros_rgb_image)
+                self.seg_pub.publish(ros_seg_image)
+
+            if self.is_dynamic:
+                self.publish_dynamic_states()
+    
         action_em = {}
         action_em['0'], _, _ = self.ctrl.computeControlFromState(
-                control_timestep=1/200,
+                control_timestep=1/self.timer_freq_hz,
                 state=obs["0"]["state"],
                 target_pos=self.des_pos,
                 target_vel=self.des_vel,
                 target_rpy=np.array([0, 0, self.des_yaw]).reshape(3,1)
             )
         self.action = action_em['0'].tolist()
-        
+        self.counter = self.counter + 1
         goal = Path()
         goal.header.stamp = self.get_clock().now().to_msg()
         goal.header.frame_id = "map"
@@ -270,115 +367,6 @@ class AviaryWrapper(Node):
         goal_pose.pose.position.z = self.goal_pos[2]
         goal.poses.append(goal_pose)
         self.goal_pub.publish(goal)
-
-    def publish_dynamic_states(self):
-        self.dynamic_obstacles = self.env.dynamic_obstacles
-        bbox_arr = BoundingBoxArray()
-        header = Header()
-        header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = "map"
-
-        for obs in self.dynamic_obstacles:
-            bbox = DynamicBbox()
-            pos = obs["pos"]
-            vel = obs["velocity"]
-            bbox.center_x = pos[0]
-            bbox.center_y = pos[1]
-            bbox.center_z = 0.5
-
-            bbox.velocity_x = vel[0]
-            bbox.velocity_y = vel[1]
-            bbox.velocity_z = vel[2]
-
-            bbox.height = 1.0
-            bbox.width = 0.2
-            bbox.length = 0.2
-
-            bbox_arr.boxes.append(bbox)
-        
-        bbox_arr.header = header
-        self.dyn_obs_pub.publish(bbox_arr)
-
-    def generate_noise(self, points_pcd):
-        s_y = 0.04
-        s_z = 0.04
-        point_noisy = []
-        for point in points_pcd:
-            s_x = self.get_sigma_x(point)
-            a = point[0] + np.random.normal(0, s_x)
-            b = point[1] + np.random.normal(0, s_y)
-            c = point[2] + np.random.normal(0, s_z)
-            noisy_pt = np.array([a, b, c])
-            point_noisy.append(noisy_pt)
-        
-        point_noisy = np.asarray(point_noisy)
-        return point_noisy
-
-    def get_sigma_x(self, point):
-        PI = 3.14
-        x = point[0]
-        s_x = 0.001063 + 0.0007278 * x + 0.003949 * x * x # + (0.022 * x**1.5 * theta) / ((PI / 2 - theta) * (PI / 2 - theta))
-        return s_x
-
-    def add_depth_noise(self, depth_map, fov_vertical = 90, fov_horizontal = 90):
-        """ Apply noise to the entire depth map with theta = 0. """
-        h, w = depth_map.shape
-        cx, cy = w // 2, h // 2
-        fx = w / (2 * np.tan(fov_horizontal / 2))  # Focal length in pixels
-        fy = h / (2 * np.tan(fov_vertical / 2))
-
-        noisy_depth = np.copy(depth_map)
-
-        for y in range(h):
-            for x in range(w):
-                z = depth_map[y, x]
-                if z > 0:  # Valid depth
-                    # Add axial noise
-                    noisy_depth[y, x] += self.axial_noise(z)
-
-                    # Apply lateral noise
-                    noise_xy = self.lateral_noise(z, fx)
-                    x_noisy = int(np.clip(x + noise_xy[0], 0, w - 1))
-                    y_noisy = int(np.clip(y + noise_xy[1], 0, h - 1))
-                    noisy_depth[y_noisy, x_noisy] = noisy_depth[y, x]
-
-        return noisy_depth
-
-    def axial_noise(self,z):
-        """ Axial noise model based on depth z (theta = 0). """
-        # sigma_z = 0.0012 + 0.0019 * (z - 0.4)**2
-        sigma_z = 0.001063 + 0.0007278 * z + 0.003949 * z * z
-        return np.random.normal(0, sigma_z)
-
-    def lateral_noise(self,z, fx=585):
-        """ Lateral noise model without angle dependency (theta = 0). """
-        sigma_L = 0.04
-        return np.random.normal(0, sigma_L, 2)  # Noise for (x, y)
-
-    def compute_incidence(self, point):
-        return math.atan2(math.sqrt(point[0]**2 + point[1]**2), point[2])
-
-    def apply_low_pass_filter(self, desired_yaw):
-        """Apply low-pass filter to the desired yaw."""
-        filtered_yaw = self.alpha * desired_yaw + (1 - self.alpha) * self.prev_des_yaw
-        self.prev_des_yaw = filtered_yaw
-        return filtered_yaw
-
-    def apply_rate_limiting(self, desired_yaw):
-        """Apply rate-limiting to the yaw."""
-        dt = 0.01
-        # Calculate the desired change in yaw
-        yaw_diff = desired_yaw - self.prev_yaw
-        max_yaw_diff = self.yaw_rate_max * dt  # Maximum allowable yaw change in this timestep
-
-        # Limit the yaw change to the maximum allowable rate
-        if abs(yaw_diff) > max_yaw_diff:
-            yaw_diff = np.sign(yaw_diff) * max_yaw_diff
-
-        # Update the previous yaw and time
-        self.prev_yaw += yaw_diff
-        
-        return self.prev_yaw
 
     #### Read the Trajectory (pos, vel, acc, jerk, snap)
     def get_trajectory_callback(self, msg):

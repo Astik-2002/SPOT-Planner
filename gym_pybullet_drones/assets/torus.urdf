@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<robot name="torus">
+
+  <!-- Tree (single link version - simpler) -->
+  <link name="torus_link">
+    <visual>
+      <geometry>
+	      <mesh filename="torus.obj"/>
+      </geometry>
+      <origin xyz="0 0 2" rpy="0 1.5708 0"/>
+    </visual>
+    <collision>
+      <geometry>
+        <mesh filename="torus.obj" scale="1 1 1"/>
+      </geometry>
+      <origin xyz="0 0 2" rpy="0 1.5708 0"/>
+    </collision>
+  </link>
+
+</robot>

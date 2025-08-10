@@ -86,6 +86,7 @@ static void free_resnode(struct res_node*);
 struct kdtree *kd_create(int k)
 {
 	struct kdtree *tree;
+	// printf("tree create called in kd_create");
 
 	if(!(tree = malloc(sizeof *tree))) {
 		return 0;
@@ -101,6 +102,7 @@ struct kdtree *kd_create(int k)
 
 void kd_free(struct kdtree *tree)
 {
+	printf("tree destruct called in kd_free");
 	if(tree) {
 		kd_clear(tree);
 		free(tree);

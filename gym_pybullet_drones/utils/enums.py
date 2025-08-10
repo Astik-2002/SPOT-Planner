@@ -4,6 +4,7 @@ class DroneModel(Enum):
     """Drone models enumeration class."""
 
     CF2X = "cf2x"   # Bitcraze Craziflie 2.0 in the X configuration
+    MANTIS = "mantis" # Just fucking around
     CF2P = "cf2p"   # Bitcraze Craziflie 2.0 in the + configuration
     HB = "hb"       # Generic quadrotor (with AscTec Hummingbird inertial properties)
 

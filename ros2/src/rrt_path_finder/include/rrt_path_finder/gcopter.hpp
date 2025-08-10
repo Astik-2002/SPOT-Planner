@@ -77,7 +77,6 @@ namespace gcopter
         Eigen::VectorXd physicalPm;
         double safety_margin;
         double zero_cost;
-        bool biasing;
         double allocSpeed;
 
         lbfgs::lbfgs_parameter_t lbfgs_params;
@@ -368,8 +367,7 @@ namespace gcopter
                                                    flatness::FlatnessMap &flatMap,
                                                    double &cost,
                                                    Eigen::VectorXd &gradT,
-                                                   Eigen::MatrixX3d &gradC,
-                                                   const bool &safety_bias)
+                                                   Eigen::MatrixX3d &gradC)
         {
             const double velSqrMax = magnitudeBounds(0) * magnitudeBounds(0);
             const double omgSqrMax = magnitudeBounds(1) * magnitudeBounds(1);
@@ -447,26 +445,10 @@ namespace gcopter
                     {
                         outerNormal = hPolys[L].block<1, 3>(k, 0);
                         violaPos = outerNormal.dot(pos) + hPolys[L](k, 3);
-                        if(!safety_bias)
+                        if (smoothedL1(violaPos, smoothFactor, violaPosPena, violaPosPenaD))
                         {
-                            if (smoothedL1(violaPos, smoothFactor, violaPosPena, violaPosPenaD))
-                            {
-                                gradPos += weightPos * violaPosPenaD * outerNormal;
-                                pena += weightPos * violaPosPena;
-                            } 
-                        }
-                        else
-                        {
-                            // if (smoothedL1Corridor(violaPos, smoothFactor, safety_margin, violaPosPena, violaPosPenaD))
-                            // {
-                            //     gradPos += weightPos * violaPosPenaD * outerNormal;
-                            //     pena += weightPos * violaPosPena;
-                            // }
-                            if (smoothedL1(violaPos, smoothFactor, violaPosPena, violaPosPenaD))
-                            {
-                                gradPos += weightPos * violaPosPenaD * outerNormal;
-                                pena += weightPos * violaPosPena;
-                            }
+                            gradPos += weightPos * violaPosPenaD * outerNormal;
+                            pena += weightPos * violaPosPena;
                         }
                     }
 
@@ -547,7 +529,7 @@ namespace gcopter
                                     obj.smoothEps, obj.safety_margin, 
                                     obj.zero_cost, obj.integralRes,
                                     obj.magnitudeBd, obj.penaltyWt, obj.flatmap,
-                                    cost, obj.partialGradByTimes, obj.partialGradByCoeffs, obj.biasing);
+                                    cost, obj.partialGradByTimes, obj.partialGradByCoeffs);
 
             obj.minco.propogateGrad(obj.partialGradByCoeffs, obj.partialGradByTimes,
                                     obj.gradByPoints, obj.gradByTimes);

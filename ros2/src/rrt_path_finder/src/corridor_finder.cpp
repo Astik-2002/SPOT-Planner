@@ -439,7 +439,6 @@ inline Vector3d safeRegionRrtStar::genSample()
         pt = end_pt;
         return pt;
     }
-
     /*  Generate samples in a heuristic hype-ellipsoid region  */
     //    1. generate samples according to (rho, phi), which is a unit circle
     //    2. scale the unit circle to a ellipsoid
@@ -472,12 +471,16 @@ inline Vector3d safeRegionRrtStar::genSample()
         pt(0) = as * sin(thetas) * cos(phis);
         pt(1) = bs * sin(thetas) * sin(phis);
         pt(2) = bs * cos(thetas);
-
+        
         pt = rotation_inf * pt + translation_inf;
 
         pt(0) = min( max( pt(0), x_l ), x_h );
         pt(1) = min( max( pt(1), y_l ), y_h );
         pt(2) = min( max( pt(2), z_l ), z_h );
+        if (!std::isfinite(pt[0]) || !std::isfinite(pt[1]) || !std::isfinite(pt[2]))
+        {
+            std::cerr<<"invalid sample in if 2, 1"<<std::endl;
+        }
     }
 
     return pt;
@@ -536,7 +539,7 @@ inline NodePtr safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr node
 
 bool safeRegionRrtStar::checkTrajPtCol(Vector3d & pt)
 {     
-    if(radiusSearchCollisionPred(pt) < 0.1 ) return true;
+    if(radiusSearch(pt) < 0.0 ) return true;
     else return false;
 }
 
@@ -972,7 +975,7 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
 {   
     /*  The re-evaluate of the RRT*, find the best feasble path (corridor) by lazy-evaluzation  */
     if(path_exist_status == false){
-        // std::cout<<"[path re-evaluate] no path exists. "<<std::endl;
+        std::cout<<"[path re-evaluate] no path exists. "<<std::endl;
         return;
     }
     

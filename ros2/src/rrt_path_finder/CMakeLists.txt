@@ -28,6 +28,7 @@ find_package(cv_bridge REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(mavros_msgs REQUIRED)  # Add MAVROS package
 find_package(geometry_msgs REQUIRED)  # For MAVROS messages
+find_package(tf2_eigen REQUIRED)
 
 # Find libdwarf and libdw
 find_path(LIBDWARF_INCLUDE_DIRS NAMES dwarf.h libdwarf.h PATHS /usr/include/libdwarf REQUIRED)
@@ -185,8 +186,17 @@ ament_target_dependencies(rrt_node_px4_yaw px4_msgs)
 # PCD manipulation tools
 add_rrt_executable(pcd_manipulation src/pcd_manipulation.cpp)
 add_rrt_executable(pcd_segmentation src/pcd_segmentation.cpp)
-ament_target_dependencies(pcd_segmentation cv_bridge)
-
+ament_target_dependencies(pcd_segmentation cv_bridge 
+  tf2
+  tf2_ros
+  tf2_sensor_msgs
+  sensor_msgs
+  cv_bridge
+  pcl_conversions
+  tf2_geometry_msgs
+  tf2_eigen
+)
+target_link_libraries(pcd_segmentation tf2_eigen::tf2_eigen)
 # Pointcloud transformer
 add_executable(pointcloud_transformer src/pointcloud_transformer.cpp)
 ament_target_dependencies(pointcloud_transformer

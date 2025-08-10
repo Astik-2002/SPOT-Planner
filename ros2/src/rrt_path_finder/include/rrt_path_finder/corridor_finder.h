@@ -112,9 +112,9 @@ class safeRegionRrtStar
 		void tracePath();
 
 		/* utility functions */
-        inline double getDis(const NodePtr node1, const NodePtr node2);
-		inline double getDis(const NodePtr node1, const Eigen::Vector3d & pt);
-		inline double getDis(const Eigen::Vector3d & p1, const Eigen::Vector3d & p2);
+        double getDis(const NodePtr node1, const NodePtr node2);
+		double getDis(const NodePtr node1, const Eigen::Vector3d & pt);
+		double getDis(const Eigen::Vector3d & p1, const Eigen::Vector3d & p2);
 		inline Eigen::Vector3d genSample();
 		inline Eigen::Vector3d getRootCoords();
 		inline double radiusSearch(Eigen::Vector3d & pt);

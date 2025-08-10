@@ -635,7 +635,7 @@ namespace gcopter_fixed
                           const Eigen::VectorXd &magnitudeBounds,
                           const Eigen::VectorXd &penaltyWeights,
                           const Eigen::VectorXd &physicalParams,
-                          const double &fixedTimePerPiece)
+                          const Eigen::VectorXd &TimePerPiece)
         {
             headPVA = initialPVA;
             tailPVA = terminalPVA;
@@ -694,10 +694,14 @@ namespace gcopter_fixed
 
             // Allocate temp variables
             points.resize(3, pieceN - 1);
-            times.setConstant(pieceN, fixedTimePerPiece);
+            times = TimePerPiece;
             gradByPoints.resize(3, pieceN - 1);
             partialGradByCoeffs.resize(6 * pieceN, 3);
-
+            std::cout << "polyN: " << polyN << std::endl;
+            std::cout << "pieceIdx: " << pieceIdx.transpose() << std::endl;
+            std::cout << "pieceN: " << pieceN << std::endl;
+            std::cout << "spatialDim: " << spatialDim << std::endl;
+            std::cout << "TimePerPiece size: " << TimePerPiece.size() << std::endl;
             return true;
         }
 
