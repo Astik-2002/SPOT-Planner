@@ -369,12 +369,24 @@ class VisionAviary(BaseAviary):
                     print(f"File not found: {tree_urdf}")
 
 
-    def _addDynamicObstacles(self, num_obstacles=1, x_bounds=(2, 22), y_bounds=(-10, 10), velocity_range=(-0.35, 0.35)):
+    def _addDynamicObstacles(self, num_obstacles=1, x_bounds=(2, 18), y_bounds=(-8, 8), velocity_range=(-0.7, 0.7)):
         """Adds dynamic obstacles that move with velocity profiles."""
         base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
+
         obstacle_urdf = os.path.join(base_path, "red_cylinder.urdf")
         torus_urdf = os.path.join(base_path, "torus.urdf")
+        radii_array = ["red_cylinder_0.2.urdf", "red_cylinder_0.3.urdf", "red_cylinder_0.4.urdf", "red_cylinder_0.5.urdf"]
         for i in range(num_obstacles):
+            num = random.randrange(4)
+            obstacle_urdf = os.path.join(base_path, radii_array[num])
+            if(num == 0):
+                radius = 0.2
+            if(num == 1):
+                radius = 0.3
+            if(num == 2):
+                radius = 0.4
+            if(num == 3):
+                radius = 0.5
             # Generate random initial positions within bounds
             x_pos = np.random.uniform(x_bounds[0], x_bounds[1])
             y_pos = np.random.uniform(y_bounds[0], y_bounds[1])
@@ -406,13 +418,14 @@ class VisionAviary(BaseAviary):
                     "pos": pos,
                     "id": obstacle_id,
                     "velocity": velocity,
+                    "radius":radius,
                     "type":type_obs
                 })
                 self.obstacle_ids.append(obstacle_id)
             else:
                 print(f"File not found: {urdf_to_use}")
 
-    def _updateDynamicObstacles(self, range_x = [2, 22], range_y = [-10, 10]):
+    def _updateDynamicObstacles(self, range_x = [2, 18], range_y = [-8, 8]):
         """Updates the positions of dynamic obstacles based on their velocities."""
         for obstacle in self.dynamic_obstacles:
             obstacle_id = obstacle["id"]
@@ -472,7 +485,7 @@ class VisionAviary(BaseAviary):
         drone_body_id = self.DRONE_IDS[drone_id]
         
         # Check ground collision (z-coordinate)
-        if drone_pos[2] < self.collision_threshold:
+        if drone_pos[2] < 0.1:
             return True
         
         # Check obstacle collisions
@@ -481,7 +494,7 @@ class VisionAviary(BaseAviary):
             physicsClientId=self.CLIENT
         )
         for contact in contact_points:
-            if contact[2] in self.obstacle_ids:  # contact[2] = bodyB ID
+            if contact[2] == -1 or contact[2] in self.obstacle_ids:
                 return True
         return False
     # def _addObstacles(self):

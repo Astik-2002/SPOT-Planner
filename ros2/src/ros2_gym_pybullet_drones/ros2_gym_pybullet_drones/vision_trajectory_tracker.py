@@ -38,6 +38,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 from custom_interface_gym.msg import TrajMsg
 import csv, math
+from std_msgs.msg import String
 
 
 class AviaryWrapper(Node):
@@ -54,7 +55,7 @@ class AviaryWrapper(Node):
         self.INIT_XYZS = np.array([[0.0, self.R, self.H]])
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
-        self.goal_pos = np.array([[30.0, 0.0, 1.5]]).flatten()
+        self.goal_pos = np.array([[26.0, 0.0, 1.0]]).flatten()
         self.lidar = True
         self.is_dynamic = True
         self.is_static = False
@@ -97,6 +98,7 @@ class AviaryWrapper(Node):
         # self.wp_subs = self.create_subscription(Path, 'rrt_waypoints', self.get_waypoint_callback, 1)
         self.traj_subs = self.create_subscription(TrajMsg,'rrt_command', self.get_trajectory_callback, 1)
         self.dyn_obs_pub = self.create_publisher(BoundingBoxArray, 'dynamic_obs_state', 1)
+        self.status_pub = self.create_publisher(String, '/simulation_status', 1)
         self._is_vis_active = True
         self.pos = self.INIT_XYZS.flatten()
         self.waypoints = []
@@ -119,6 +121,8 @@ class AviaryWrapper(Node):
         # Call a timer to publish the marker array at a lower rate than the main loop
         # self.trajectory_timer = self.create_timer(1.0, self.publish_trajectory)
         self.is_goal_sent = False
+        self.goal_reached = False
+
         self.is_hover_pos_set = False
         self.des_pos = self.INIT_XYZS.flatten()
         self.hover_pos = self.INIT_XYZS.flatten()
@@ -176,7 +180,7 @@ class AviaryWrapper(Node):
             bbox = DynamicBbox()
             pos = obs["pos"]
             d_obs = np.linalg.norm(pos - self.pos)
-            if d_obs < 5.0:
+            if d_obs < 6.0:
                 vel = obs["velocity"]
                 bbox.center_x = pos[0]
                 bbox.center_y = pos[1]
@@ -187,8 +191,8 @@ class AviaryWrapper(Node):
                 bbox.velocity_z = vel[2]
 
                 bbox.height = 5.0
-                bbox.width = 1.0
-                bbox.length = 1.0
+                bbox.width = 2*obs["radius"] + 0.2
+                bbox.length = 2*obs["radius"] + 0.2
 
                 bbox_arr.boxes.append(bbox)
 
@@ -206,11 +210,11 @@ class AviaryWrapper(Node):
                 marker.pose.orientation.y = 0.0
                 marker.pose.orientation.z = 0.0
                 marker.pose.orientation.w = 1.0
-                marker.scale.x = 1.0
-                marker.scale.y = 1.0
+                marker.scale.x = 2*obs["radius"] + 0.2
+                marker.scale.y = 2*obs["radius"] + 0.2
                 marker.scale.z = 5.0
                 marker.color.a = 0.5  # Transparent
-                if d_obs < 5.0:
+                if d_obs < 6.0:
                     marker.color.r = 1.0
                     marker.color.g = 0.0
                 else:
@@ -251,6 +255,13 @@ class AviaryWrapper(Node):
     #### Step the env and publish drone0's state on topic 'obs'
     def step_callback(self):
         self.step_cb_count += 1
+        collision_status = self.env._checkCollision(0)
+        if self.goal_reached:
+            print("uav reached goal")
+            self.status_pub.publish(String(data="goal_reached"))
+        elif collision_status:
+            print("uav colliding")
+            self.status_pub.publish(String(data="crash"))
 
         obs, reward, done, info = self.env.step({"0": self.action})
         msg = Float32MultiArray()
@@ -380,29 +391,18 @@ class AviaryWrapper(Node):
             self.des_pos = self.hover_pos
             return
         else:
-            if(np.linalg.norm(self.goal_pos - self.pos.flatten()) < 3.0):
-                if not self.log_set: 
-                    self.log_set = True
-                    if len(self.x_hist) > 1:
-                        total_length = 0
-                        for i in range(1, len(self.x_hist)):
-                            dx = self.x_hist[i] - self.x_hist[i-1]
-                            dy = self.y_hist[i] - self.y_hist[i-1]
-                            dz = self.z_hist[i] - self.z_hist[i-1]
-                            total_length += math.sqrt(dx**2 + dy**2 + dz**2)
-                        print("Total trajectory length:", total_length)
-                        self.des_pos = self.goal_pos.flatten()
-                        # with open("ellipsoid_ex1_env6.csv", "w", newline="") as f:
-                        #     writer = csv.writer(f)
-                        #     writer.writerow(["x", "y", "z"])
-                        #     for x, y, z in zip(self.x_hist, self.y_hist, self.z_hist):
-                        #         writer.writerow([x, y, z])
-                        return
-    
+            dist_goal = np.linalg.norm(self.goal_pos - self.pos.flatten())
+            if(dist_goal < 4.0):
+                self.goal_reached = True
+                self.des_pos = self.goal_pos.flatten()
+                return
+        
             self.is_hover_pos_set = False
             self.des_pos = np.array([[msg.position.x, msg.position.y, msg.position.z]]).flatten()
             self.des_vel = np.array([[msg.velocity.x, msg.velocity.y, msg.velocity.z]]).flatten()
             self.des_yaw = msg.yaw
+                # print("current command yaw", msg.yaw)
+            
             # print("current command yaw", msg.yaw)
             
 

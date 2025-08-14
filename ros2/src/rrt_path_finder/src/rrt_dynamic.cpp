@@ -48,6 +48,7 @@
 #include "rrt_path_finder/yaw_optimization.hpp"
 #include "rrt_path_finder/non_uniform_bspline.hpp"
 #include "rrt_path_finder/BT.hpp"
+// #include "rrt_path_finder/custom_hash.hpp"
 #include "custom_interface_gym/msg/dynamic_bbox.hpp"
 #include "custom_interface_gym/msg/bounding_box_array.hpp"
 #include "custom_interface_gym/msg/pcd_array.hpp"
@@ -67,12 +68,13 @@ public:
     PointCloudPlanner() : Node("point_cloud_planner"),
                           tf_buffer_(this->get_clock()),
                           tf_listener_(tf_buffer_),
-                          gen(rd())
+                          gen(rd()),
+                          dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>())
     {
         // Parameters
-        this->declare_parameter("safety_margin", 0.6);
+        this->declare_parameter("safety_margin", 0.8);
         this->declare_parameter("uav_radius", 0.6);
-        this->declare_parameter("search_margin", 0.3);
+        this->declare_parameter("search_margin", 0.5);
         this->declare_parameter("max_radius", 5.0);
         this->declare_parameter("refine_portion", 0.80);
         this->declare_parameter("sample_portion", 0.25);
@@ -162,10 +164,6 @@ public:
         _map_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "pcd_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudCallBack, this, std::placeholders::_1));
 
-        _pcd_array_sub_ = this->create_subscription<custom_interface_gym::msg::PcdArray>(
-            "pcd_array_gym_pybullet", 1, std::bind(&PointCloudPlanner::rcvPointCloudArrayCallBack, this, std::placeholders::_1));
-
-
         _odometry_sub = this->create_subscription<nav_msgs::msg::Odometry>(
             "odom", 10, std::bind(&PointCloudPlanner::rcvOdomCallback, this, std::placeholders::_1));
         _bbox_sub = this->create_subscription<custom_interface_gym::msg::BoundingBoxArray>(
@@ -208,9 +206,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_4_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamic_pcl_pub_0_;
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr _dest_pts_sub;
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr _map_sub;
-    rclcpp::Subscription<custom_interface_gym::msg::PcdArray>::SharedPtr _pcd_array_sub_;
-    
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr _map_sub;    
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr _odometry_sub;
     rclcpp::Subscription<custom_interface_gym::msg::BoundingBoxArray>:: SharedPtr _bbox_sub;
 
@@ -243,7 +239,6 @@ private:
     rclcpp::Time pointcloud_receive_time, init_planning_time;
     std::chrono::time_point<std::chrono::steady_clock> obsvstamp = std::chrono::steady_clock::now();
     int quadratureRes = 16;
-    float weightT_rrt = 5.0;
     float smoothingEps = 0.01;
     float relcostto1 = 0.00001;
     int _max_samples;
@@ -265,8 +260,7 @@ private:
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     gcopter_fixed::GCOPTER_PolytopeSFC_FixedTime _gCopter_fixed;
     gcopter_dynamic::GCOPTER_PolytopeSFC_Dynamic _gCopter_dynamic;
-
-    std::vector<pcl::search::KdTree<pcl::PointXYZ>> kdtreeList{n_preds_};
+    pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud;
     pcl::search::KdTree<pcl::PointXYZ> static_kdtree;
     pcl::search::KdTree<pcl::PointXYZ> dynamic_kdtree;
 
@@ -321,8 +315,8 @@ private:
     bool near_dynamic = false;
     std::random_device rd;
     std::mt19937 gen;
-    double weight_t = 0.1;
-
+    double weight_t = 0.3;
+    std::unordered_map<Eigen::Vector3d, Eigen::Vector3d, Vec3dHash, Vec3dEqual> dynamic_points_hash{0, Vec3dHash(1e-6), Vec3dEqual(1e-6)};
     float random_between(float lower, float upper) 
     {
         std::uniform_real_distribution<float> dis(lower, upper);
@@ -385,7 +379,7 @@ private:
         _start_acc = (_start_vel - _last_vel)/(del_t);
         odom_time = rclcpp::Time(_odom.header.stamp.sec, _odom.header.stamp.nanosec);
         double dis_commit = _rrtPathPlanner.getDis(_start_pos, _commit_target.head<3>());
-        std::cout<<"distance between commit target and uav: "<<dis_commit<<std::endl;
+        // std::cout<<"distance between commit target and uav: "<<dis_commit<<std::endl;
 
         if(dis_commit < 1.0)
         {
@@ -423,106 +417,6 @@ private:
         }
     }
 
-    void rcvPointCloudArrayCallBack(const custom_interface_gym::msg::PcdArray::SharedPtr pointcloud_msg)
-    {
-        if (pointcloud_msg->pcds.size() == 0)
-            return;
-        pointcloud_receive_time = rclcpp::Clock().now();
-        // std::cout<<"wrong clock debug 4"<<std::endl;
-
-        PCDstart_time = (pointcloud_receive_time - now_ros).seconds();
-        // Transform the point cloud from camera frame to map frame
-        cloud_input.clear();
-
-        for(int i = 0; i<pointcloud_msg->pcds.size(); i++)
-        {
-            sensor_msgs::msg::PointCloud2 cloud_transformed;
-            sensor_msgs::msg::PointCloud2 cloud_msg = pointcloud_msg->pcds[i];
-            pcl::PointCloud<pcl::PointXYZ> cloud_temp;
-
-            try
-            {
-                tf_buffer_.transform(cloud_msg, cloud_transformed, "ground_link", tf2::durationFromSec(0.1));
-            }
-            catch (tf2::TransformException &ex)
-            {
-                RCLCPP_WARN(this->get_logger(), "Could not transform point cloud: %s", ex.what());
-                return;
-            }
-            RCLCPP_INFO(this->get_logger(), "pcd size individual: %f", cloud_temp.points.size());
-
-            pcl::fromROSMsg(cloud_transformed, cloud_temp);
-            cloud_input += cloud_temp;
-
-        }
-        RCLCPP_INFO(this->get_logger(), "pcd size: %d", cloud_input.points.size());
-
-        _is_has_map = true;
-        dynamic_points.clear();
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-        dynamic_cloud->points.reserve(cloud_input.points.size() / 10);  // Heuristic guess
-
-        // Efficient segmentation and filtering using std::remove_if
-        auto& points = cloud_input.points;
-        auto new_end = std::remove_if(points.begin(), points.end(),
-            [&](const pcl::PointXYZ& point) {
-                for (const auto& bbox : dynamic_obs_array)
-                {
-                    double cx = bbox(0, 0), cy = bbox(0, 1), cz = bbox(0, 2);
-                    double half_height = bbox(2, 0) / 2.0;
-                    double half_length = bbox(2, 1) / 2.0;
-                    double half_width  = bbox(2, 2) / 2.0;
-                    Eigen::Vector3d bbox_velocity(bbox(1, 0), bbox(1, 1), bbox(1, 2));
-                    if (point.x >= cx - half_length && point.x <= cx + half_length &&
-                        point.y >= cy - half_width  && point.y <= cy + half_width &&
-                        point.z >= cz - half_height && point.z <= cz + half_height)
-                    {
-                        dynamic_cloud->points.push_back(point);
-                        dynamic_points.emplace_back(Eigen::Vector3d(point.x, point.y, point.z), bbox_velocity);
-                        return true;  // Remove from static cloud
-                    }
-                }
-                return false;  // Keep in static cloud
-            });
-
-        points.erase(new_end, points.end());
-        pcd_idx += 1;
-        if(cloud_input.points.size() > 0)
-        {
-            static_kdtree.setInputCloud(cloud_input.makeShared());
-        }
-        _rrtPathPlanner.setInputDynamic(cloud_input, dynamic_points, _start_pos, PCDstart_time);
-        if(_is_traj_exist)
-        {
-            _is_traj_exist = checkSafeTrajectory();
-        }
-        // Ensure kdtreeList is properly sized
-        if (kdtreeList.size() != static_cast<size_t>(n_preds_))
-            kdtreeList.resize(n_preds_);
-
-        if(_is_traj_exist)
-        {
-            n_preds_ = corridor_points4d.size();
-            for (size_t i = 0; i < corridor_points4d.size(); i++)            
-            {
-                double t_n = corridor_points4d[i][3];
-                auto future_points = getObstaclePoints_display(i);
-                if (future_points.empty()) continue; // Avoid segmentation fault on empty data
-
-                pcl::PointCloud<pcl::PointXYZ>::Ptr future_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-                future_cloud->points.reserve(future_points.size());
-                for (const auto& pt : future_points) {
-                future_cloud->points.emplace_back(pt.x(), pt.y(), pt.z());
-                }
-                future_cloud->width = future_cloud->points.size();
-                future_cloud->height = 1;
-                future_cloud->is_dense = true;
-                if (i >= 0 && i < static_cast<int>(dynamic_pcl_pubs_.size()))
-                publishColoredCloud(future_points, i);
-            }
-        }
-    }
-
     void rcvPointCloudCallBack(const sensor_msgs::msg::PointCloud2::SharedPtr pointcloud_msg)
     {
         if (pointcloud_msg->data.empty())
@@ -550,9 +444,9 @@ private:
             return;
 
         _is_has_map = true;
-        pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-        dynamic_cloud->points.reserve(cloud_input.points.size() / 10);  // Heuristic guess
+        dynamic_cloud->clear();
         dynamic_points.clear();
+        dynamic_points_hash.clear();
         // Efficient segmentation and filtering using std::remove_if
         auto& points = cloud_input.points;
         auto new_end = std::remove_if(points.begin(), points.end(),
@@ -569,7 +463,9 @@ private:
                         point.z >= cz - half_height && point.z <= cz + half_height)
                     {
                         dynamic_cloud->points.emplace_back(point);
-                        dynamic_points.emplace_back(Eigen::Vector3d(point.x, point.y, point.z), bbox_velocity);
+                        Eigen::Vector3d pos(point.x, point.y, point.z);
+                        dynamic_points.emplace_back(pos, bbox_velocity);
+                        dynamic_points_hash[pos] = bbox_velocity;
                         return true;  // Remove from static cloud
                     }
                 }
@@ -588,10 +484,8 @@ private:
             dynamic_kdtree.setInputCloud(dynamic_cloud);
         }
         _rrtPathPlanner.setInputDynamic(cloud_input, dynamic_points, _start_pos, PCDstart_time);
-        if(_is_traj_exist)
-        {
-            _is_traj_exist = checkSafeTrajectory();
-        }
+        
+        checkSafeTrajectory();
         
         if(_is_traj_exist)
         {
@@ -691,15 +585,19 @@ private:
         return obstacle_points;
     }
 
-    std::vector<Eigen::Vector3d> getObstaclePoints_continous(double &t1, double &t2)
+    Eigen::Matrix3Xd getObstaclePoints_continous(double &t1, double &t2, Eigen::Matrix<double, 6, 4> &bd)
     {
-        std::vector<Eigen::Vector3d> obstacle_points;
+        Eigen::Matrix3Xd obstacle_points(3,0);
         int k = cloud_input.points.size();
         for (int i=0; i<k; i++)
         {
             auto pt = cloud_input.points[i];
             Eigen::Vector3d pos(pt.x, pt.y, pt.z);
-            obstacle_points.push_back(pos);
+            if ((bd.leftCols<3>() * pos + bd.rightCols<1>()).maxCoeff() < 0.0)
+            {
+                obstacle_points.conservativeResize(3, obstacle_points.cols() + 1);
+                obstacle_points.col(obstacle_points.cols() - 1) = pos;
+            }
         }
         // std::cout<<"input cloud size: "<<k<<std::endl;
         for (const auto& [position, velocity] : dynamic_points)
@@ -707,7 +605,11 @@ private:
             for(double t = t1; t <= t2; t += 0.2)
             {
                 Eigen::Vector3d pos = position + (t-PCDstart_time)*velocity;
-                obstacle_points.push_back(pos);
+                if ((bd.leftCols<3>() * pos + bd.rightCols<1>()).maxCoeff() < 0.0)
+                {
+                    obstacle_points.conservativeResize(3, obstacle_points.cols() + 1);
+                    obstacle_points.col(obstacle_points.cols() - 1) = pos;
+                }
             }
         }
 
@@ -903,26 +805,15 @@ private:
             bd(5, 3) = +std::max(std::min(a(2), b(2)) - range, lowCorner(2));
 
             valid_pc.clear();
-            auto obstacle_points = getObstaclePoints_continous(t1, t2);
-
-            for (const Eigen::Vector3d &p : obstacle_points)
-            {
-                if ((bd.leftCols<3>() * p + bd.rightCols<1>()).maxCoeff() < 0.0)
-                {
-                    valid_pc.emplace_back(p);
-                }
-            }
-            if (valid_pc.empty()) {
-                // std::cerr << "No valid points found for the current segment." << std::endl;
+            Eigen::Matrix3Xd obstacle_points = getObstaclePoints_continous(t1, t2, bd);
+            if (obstacle_points.cols() == 0) {
                 Eigen::MatrixX4d temp_bp = bd;
-                // firi::shrinkPolygon(temp_bp, _uav_radius);
                 hpolys.emplace_back(temp_bp);
                 continue;
             }
 
-            Eigen::Map<const Eigen::Matrix<double, 3, -1, Eigen::ColMajor>> pc(valid_pc[0].data(), 3, valid_pc.size());
 
-            if (ciri.convexDecomposition(bd, pc, a, b) != super_utils::SUCCESS) {
+            if (ciri.convexDecomposition(bd, obstacle_points, a, b) != super_utils::SUCCESS) {
                 std::cerr << "CIRI decomposition failed." << std::endl;
                 time_vector_poly.pop_back();
                 continue;
@@ -939,12 +830,13 @@ private:
                 if (3 <= ((hp * ah).array() > -eps).cast<int>().sum() +
                             ((hpolys.back() * ah).array() > -eps).cast<int>().sum())
                 {
-                    if (ciri.convexDecomposition(bd, pc, a, a) != super_utils::SUCCESS) 
+                    if (ciri.convexDecomposition(bd, obstacle_points, a, a) != super_utils::SUCCESS) 
                     {
                         std::cerr << "CIRI decomposition failed." << std::endl;
                         continue;
                     }
                     ciri.getPolytope(optimized_poly);
+                    time_vector_poly.push_back(1.0);
                     gap = optimized_poly.GetPlanes(); // Assuming getPlanes() returns the planes of the polytope
                     hpolys.emplace_back(gap);
                 }
@@ -1186,12 +1078,12 @@ private:
         Eigen::VectorXd magnitudeBounds(5);
         Eigen::VectorXd penaltyWeights(5);
         Eigen::VectorXd physicalParams(6);
-        std::vector<float> chiVec = {10000, 10000, 10000, 10000, 100000, 1000};
+        std::vector<float> chiVec = {1000, 10000, 10000, 10000, 100000, 1000};
         magnitudeBounds(0) = max_vel;
         magnitudeBounds(1) = 2.1;
         magnitudeBounds(2) = 1.05;
         magnitudeBounds(3) = 0.5*mass*9.8;
-        magnitudeBounds(4) = t2w*mass*9.8;
+        magnitudeBounds(4) = 5*mass*9.8;
         penaltyWeights(0) = chiVec[0];
         penaltyWeights(1) = chiVec[1];
         penaltyWeights(2) = chiVec[2];
@@ -1207,15 +1099,20 @@ private:
         int quadratureRes = 16;
         float weightT = 20.0;
         float smoothingEps = 0.6;
-        float relcostto1 = 1e-3;
+        float relcostto1 = 1e-5;
         _traj.clear();
         auto t_now = rclcpp::Clock().now();
         double s_time = (t_now - pointcloud_receive_time).seconds();
-        _gCopter_dynamic.setDynamicObstacles(dynamic_obs, s_time, _uav_radius);
+        auto dynamic_obs_temp = dynamic_obs;
+        for(auto &mat : dynamic_obs_temp)
+        {
+            mat.row(0) = mat.row(0) + s_time*mat.row(1);
+        }
+        _gCopter_dynamic.setDynamicObstacles(dynamic_obs_temp, s_time, _uav_radius + _uav_radius);
         // !_gCopter_dynamic.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, true)
         // !_gCopter.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams)
         std::cout<<"matrix check backup traj gen 1"<<std::endl;
-        if (!_gCopter_dynamic.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, true))
+        if (!_gCopter.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams))
         {
             std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
             _is_traj_exist = false;
@@ -1228,7 +1125,7 @@ private:
         }
         std::cout<<"matrix check backup traj gen 2"<<std::endl;
 
-        if (std::isinf(_gCopter_dynamic.optimize(_traj, relcostto1)))
+        if (std::isinf(_gCopter.optimize(_traj, relcostto1)))
         {
             std::cout<<"gcopter optimization cost is infinity, traj exist set to false"<<std::endl;
             _is_traj_exist = false;
@@ -1285,8 +1182,6 @@ private:
             std::cout<<"matrix check backup traj gen 7"<<std::endl;
 
             _rrt_des_traj_pub->publish(des_traj_msg);
-            _commit_target.head<3>() = _traj.getPos(_traj.getTotalDuration()*0.7);
-            _commit_target[3] = (bkup_trajstamp - now_ros).seconds() + _traj.getTotalDuration()*0.5;
             std::cout<<"matrix check backup traj gen 7"<<std::endl;
 
             // std::cout<<std::endl;
@@ -1366,11 +1261,6 @@ private:
             Eigen::VectorXd durations = _traj.getDurations();
             std::vector<double> durations_vec(durations.data(), durations.data() + durations.size());
             auto coefficient_mat = _traj.getCoefficientMatrices();
-            // for (auto mat : coefficient_mat)
-            // {
-            //     std::cout<<"######## mat #########"<<std::endl;
-            //     std::cout<<mat<<std::endl;
-            // }
             for(int i=0; i<_traj.getPieceNum(); i++)
             {
                 des_traj_msg.duration_vector.push_back(durations_vec[i]);
@@ -1379,7 +1269,6 @@ private:
                     for(int k=0; k<coefficient_mat[i].cols(); k++)
                     {
                         des_traj_msg.matrices_flat.push_back(coefficient_mat[i](j, k));
-                        // only for debugging 
                     }
                 }
             }
@@ -1390,9 +1279,19 @@ private:
                 yaw_traj_generation(_traj, des_traj_msg);
             }
             _rrt_des_traj_pub->publish(des_traj_msg);
-            _commit_target.head<3>() = _traj.getPos(_traj.getTotalDuration()*0.5);
+            double temp_commit_time = _traj.getTotalDuration()*0.7;
+            auto temp_commit_pos = _traj.getPos(temp_commit_time);
             Eigen::Vector4d root_coords = _rrtPathPlanner.getRootCoords();
-            _commit_target[3] = root_coords[3] + _traj.getTotalDuration()*0.5;
+            if((_start_pos - temp_commit_pos).norm() >= 1.0)
+            {
+                _commit_target.head<3>() = temp_commit_pos;
+                _commit_target[3] = root_coords[3] + temp_commit_time;
+            }
+            else
+            {
+                _commit_target.head<3>() = _corridor_end_pos;
+                _commit_target[3] = root_coords[3] + temp_commit_time/0.7;
+            }
             // std::cout<<std::endl;
             return;
         }
@@ -1457,6 +1356,24 @@ private:
         }
         if (_traj.getPieceNum() > 0)
         {
+
+            Eigen::Vector3d temp_commit_target = _traj.getPos(_traj.getTotalDuration()*0.5);
+            if((temp_commit_target - _commit_target.head<3>()).norm() < _uav_radius)
+            {
+                std::cout<<"invalid commit target"<<std::endl;
+                _is_traj_exist = false;
+                current_state = INITIAL;
+                custom_interface_gym::msg::DesTrajectory des_traj_msg;
+                des_traj_msg.header.stamp = rclcpp::Clock().now();
+                des_traj_msg.header.frame_id = "ground_link";
+                des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+                _rrt_des_traj_pub->publish(des_traj_msg);
+                return;
+            }
+            _commit_target.head<3>() = temp_commit_target;
+            Eigen::Vector4d root_coords = _rrtPathPlanner.getRootCoords();
+            _commit_target[3] = root_coords[3] + _traj.getTotalDuration()*0.5;
+
             auto t2 = std::chrono::steady_clock::now();
             auto elapsed_traj = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
             traj_gen_time = elapsed_traj;
@@ -1498,9 +1415,6 @@ private:
                 yaw_traj_generation(_traj, des_traj_msg);
             }
             _rrt_des_traj_pub->publish(des_traj_msg);
-            _commit_target.head<3>() = _traj.getPos(_traj.getTotalDuration()*0.5);
-            Eigen::Vector4d root_coords = _rrtPathPlanner.getRootCoords();
-            _commit_target[3] = root_coords[3] + _traj.getTotalDuration()*0.5;
             // std::cout<<std::endl;
             return;
         }
@@ -1513,10 +1427,10 @@ private:
         std::cout<<"[Initial planning] in initial planning callback: "<<std::endl;
         _rrtPathPlanner.reset();
         _rrtPathPlanner.setPt(_start_pos, _end_pos, _x_l, _x_h, _y_l, _y_h, _z_l, _z_h,
-                             _commit_distance, _max_samples, _sample_portion, _goal_portion, current_yaw, 1.0, 1.0, weight_t);
+                             _commit_distance, _max_samples, _sample_portion, _goal_portion, current_yaw, 0.7, 0.9, weight_t);
         init_planning_time = rclcpp::Clock().now();
         double init_time = (init_planning_time - now_ros).seconds();
-        _rrtPathPlanner.SafeRegionExpansion(0.10, init_time);
+        _rrtPathPlanner.SafeRegionExpansion(0.40, init_time);
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
         if (_rrtPathPlanner.getPathExistStatus())
         {
@@ -1546,9 +1460,10 @@ private:
                     new_start_vel = _traj.getVel(del_t + 1.25*(convexDecompTime + traj_gen_time));
                     new_start_acc = _traj.getAcc(del_t + 1.25*(convexDecompTime + traj_gen_time));
                 }
+                _is_bkup_traj_exist = false;
             }
-            // traj_generation_fixed_time(new_start_pos, new_start_vel, new_start_acc);
-            traj_generation(new_start_pos, new_start_vel, new_start_acc);
+            traj_generation_fixed_time(new_start_pos, new_start_vel, new_start_acc);
+            // traj_generation(new_start_pos, new_start_vel, new_start_acc);
 
             if(_is_traj_exist)
             {
@@ -1582,11 +1497,12 @@ private:
 
     void planIncrementalTraj()
     {
-        if (_rrtPathPlanner.getGlobalNaviStatus())
-        {
-            RCLCPP_WARN(this->get_logger(), "Almost reached final goal");
-            return;
-        }
+        // if (_rrtPathPlanner.getGlobalNaviStatus())
+        // {
+        //     RCLCPP_WARN(this->get_logger(), "Almost reached final goal");
+        //     sendFinalTrajectoryMessage();
+        //     return;
+        // }
 
         if (checkEndOfCommittedPath())
         {
@@ -1594,11 +1510,6 @@ private:
             {
                 RCLCPP_WARN(this->get_logger(), "Reached committed target but no feasible path exists");
                 _is_traj_exist = false;
-                custom_interface_gym::msg::DesTrajectory des_traj_msg;
-                des_traj_msg.header.stamp = rclcpp::Clock().now();
-                des_traj_msg.header.frame_id = "ground_link";
-                des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
-                _rrt_des_traj_pub->publish(des_traj_msg);
                 return;
             }
             else
@@ -1639,8 +1550,8 @@ private:
                 // std::cout<<"[incremental planner] seg debug 1"<<std::endl;
                 convexDecompTime = elapsed;
 
-                // traj_generation_fixed_time(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
-                traj_generation(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
+                traj_generation_fixed_time(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
+                // traj_generation(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
 
                 // std::cout<<"[incremental planner] seg debug 2"<<std::endl;
 
@@ -1765,55 +1676,6 @@ private:
         std::cout<<"[bkup check] 2"<<std::endl;
         int min_idx = 0;
         bool obs_in = false;
-        /*
-        for(int i = 0; i < dynamic_obs_array.size(); i++)
-        {
-            auto obs_mat = dynamic_obs_array[i];
-            Eigen::Vector3d pos_obs = obs_mat.row(0);
-            Eigen::Vector3d vel_obs = obs_mat.row(1);
-            Eigen::Vector3d shape_obs = obs_mat.row(2);
-            
-            double c = shape_obs[0];
-            double b = shape_obs[1];
-            double a = shape_obs[2];
-            Eigen::Vector3d rel_pos = pos_obs - _start_pos; // r_o - r
-            if(rel_pos.norm() < min_dist)
-            {
-                min_dist = rel_pos.norm();
-                min_idx = i;
-            }
-            Eigen::Vector3d rel_vel = vel_obs - _start_vel;            
-            double krep = 5.0;
-            // Compute azimuth (phi) and elevation (theta) of rel_vel
-            double rel_speed = rel_vel.norm();
-            if (rel_speed < 1e-3) continue;
-
-            double theta = std::acos(rel_vel.z() / rel_speed); // elevation
-            double phi   = std::atan2(rel_vel.y(), rel_vel.x()); // azimuth
-
-            // Construct R matrix (rotation from global to ellipsoid-aligned frame)
-            Eigen::Matrix3d R;
-            R << std::cos(phi)*std::cos(theta), -std::sin(phi),  std::cos(phi)*std::sin(theta),
-                std::sin(phi)*std::cos(theta),  std::cos(phi),  std::sin(phi)*std::sin(theta),
-                -std::sin(theta),               0,              std::cos(theta);
-
-            // Transform relative position into ellipsoid frame
-            Eigen::Vector3d ellip_coords = R * rel_pos;
-            double X = ellip_coords[0], Y = ellip_coords[1], Z = ellip_coords[2];
-            double denom = std::pow(1 + (X*X)/(b*b) + (Y*Y)/(a*a) + (Z*Z)/(c*c), 2.0);
-
-            // Force in ellipsoid-aligned frame (body frame)
-            double Fx = krep * (-2.0 * X / (b*b)) / denom;
-            double Fy = krep * (-2.0 * Y / (a*a)) / denom;
-            double Fz = krep * (-2.0 * Z / (c*c)) / denom;
-
-            Eigen::Vector3d F_ellipsoid(Fx, Fy, Fz);
-            Eigen::Vector3d F_global = R.transpose() * F_ellipsoid;
-            des_dir += F_global;
-        
-        }
-        */
-        
         des_dir = bkupDirection();
         if(des_dir == Eigen::Vector3d::Zero())
         {
@@ -1835,18 +1697,16 @@ private:
         }
         else
         {
-            _is_bkup_traj_exist = false;
             std::cout<<"[bkup check] infeasible bkup goal "<<std::endl;
-            return;
+            bkup_goal = _start_pos + (_end_pos - _start_pos).normalized();
         }
         // shortCut(true);
         std::cout<<"[bkup check] bkup goal: "<<bkup_goal<<std::endl;
-        visualizePolytope(bkup_hpolys);
         Eigen::Vector3d new_traj_start_pos = _start_pos;
         Eigen::Vector3d new_traj_start_vel = _start_vel;
         Eigen::Vector3d new_traj_start_acc = _start_acc;
         std::cout<<"[bkup check] 4"<<std::endl;
-
+        
         if(_is_bkup_traj_exist || _is_traj_exist)
         {
             auto t_curr = rclcpp::Clock().now();
@@ -1861,11 +1721,12 @@ private:
             }
             if(1.25*(bkup_convexDecompTime + bkup_traj_gen_time) < _traj.getTotalDuration() - del_t)
             {
-                new_traj_start_pos = _traj.getPos(del_t + 1.25*(bkup_convexDecompTime + bkup_traj_gen_time));
-                new_traj_start_vel = _traj.getVel(del_t + 1.25*(bkup_convexDecompTime + bkup_traj_gen_time));
-                new_traj_start_acc = _traj.getAcc(del_t + 1.25*(bkup_convexDecompTime + bkup_traj_gen_time));
+                new_traj_start_pos = _traj.getPos(del_t + 1.25*(bkup_traj_gen_time));
+                new_traj_start_vel = _traj.getVel(del_t + 1.25*(bkup_traj_gen_time));
+                new_traj_start_acc = _traj.getAcc(del_t + 1.25*(bkup_traj_gen_time));
             }
         }
+        
         std::cout<<"_start_pos: "<<_start_pos.transpose()<<std::endl;
         std::cout<<"_bkup_goal: "<<bkup_goal.transpose()<<std::endl;
         t1 = std::chrono::steady_clock::now();
@@ -1876,6 +1737,7 @@ private:
         std::cout<<"[bkup check] 6"<<std::endl;
         if(_is_bkup_traj_exist)
         {
+            visualizePolytope(bkup_hpolys);
             visualizeTrajectory(_traj, true);
         }
     }
@@ -1927,17 +1789,16 @@ private:
 
             case BACKUP:
             {
-                bool near_dynamic_c = isNearDynamicObstacles(_start_pos);
                 auto t_now = rclcpp::Clock().now();
                 auto del_t_bkup = (t_now - bkup_trajstamp).seconds();
                 bool backup_expired = (_is_bkup_traj_exist && del_t_bkup >= _traj.getTotalDuration() * 0.5);
                 bool need_replan_backup = false;
-                if(_is_bkup_traj_exist && backup_expired && (near_dynamic_c)) need_replan_backup = true;
-                if(!_is_bkup_traj_exist && (near_dynamic_c)) need_replan_backup = true;
-                std::cout<<"[Backup] need backup? "<<need_replan_backup<<" near dynamic obstacles? "<<near_dynamic_c<<std::endl;
+                if(_is_bkup_traj_exist && backup_expired && (near_dynamic)) need_replan_backup = true;
+                if(!_is_bkup_traj_exist && (near_dynamic)) need_replan_backup = true;
+                std::cout<<"[Backup] need backup? "<<need_replan_backup<<" near dynamic obstacles? "<<near_dynamic<<std::endl;
                 if(!need_replan_backup)
                 {
-                    current_state = INITIAL;
+                    current_state = INITIAL;    
                 }
                 if (need_replan_backup)
                 {
@@ -1948,13 +1809,8 @@ private:
                         RCLCPP_WARN(this->get_logger(), "Backup trajectory failed — Hovering");
                         executeEmergencyStop();
                     }
-                    need_replan_backup = false;
                     // current_state = INITIAL;
                 }
-                // else
-                // {
-                //     current_state = INITIAL;
-                // }
                 if (reachedBackupWaypoint())
                 {
                     std::cout << "[Backup] Reached safe waypoint" << std::endl;
@@ -2015,42 +1871,6 @@ private:
         des_traj_msg.header.frame_id = "ground_link";
         des_traj_msg.action = des_traj_msg.ACTION_WARN_FINAL;
         _rrt_des_traj_pub->publish(des_traj_msg);
-    }
-
-
-    bool isInSafeStaticRegion(const Eigen::Vector3d& position) 
-    {
-        pcl::PointXYZ searchPoint;
-        searchPoint.x = position(0);
-        searchPoint.y = position(1);
-        searchPoint.z = position(2);
-        
-        pointIdxRadiusSearch.clear();
-        pointRadiusSquaredDistance.clear();
-        static_kdtree.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-        
-        return !pointRadiusSquaredDistance.empty() && 
-            sqrt(pointRadiusSquaredDistance[0]) > _safety_margin;
-    }
-
-    bool isNearDynamicObstacles(const Eigen::Vector3d& position) 
-    {
-        pcl::PointXYZ searchPoint;
-        searchPoint.x = position(0);
-        searchPoint.y = position(1);
-        searchPoint.z = position(2);
-        
-        pointIdxRadiusSearch.clear();
-        pointRadiusSquaredDistance.clear();
-        dynamic_kdtree.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-        if(!pointRadiusSquaredDistance.empty())
-        {
-            return sqrt(pointRadiusSquaredDistance[0]) < (1.5 * _safety_margin + _uav_radius);
-        }
-        else
-        {
-            return false;
-        }
     }
 
     void executeEmergencyStop() 
@@ -2122,69 +1942,86 @@ private:
         return idx;
     }
 
-
     bool checkSafeTrajectory()
-    {   
+    {
+        auto delta_t_c = (rclcpp::Time(odom_time.nanoseconds(), trajstamp.get_clock_type()) - trajstamp).seconds();
+        double T = max(0.0, delta_t_c);
+        double traj_time = _traj.getTotalDuration()*0.5;
+        int dynamic_pcd_size = dynamic_cloud->points.size();
+        // --- static obstacle check (keep your existing static check) ---
+        if(_is_traj_exist)
+        {
+            for(double t = T; t < traj_time; t += (traj_time/10))
+            {
+                Eigen::Vector4d pos_t;
+                pos_t.head<3>() = _traj.getPos(t);
+                pos_t[3] = t + _rrtPathPlanner.getRootCoords()[3];
+                pcl::PointXYZ searchPoint;
+                searchPoint.x = pos_t(0);
+                searchPoint.y = pos_t(1);
+                searchPoint.z = pos_t(2);
+                pointIdxRadiusSearch.clear();
+                pointRadiusSquaredDistance.clear();
+                static_kdtree.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
+                if (!pointRadiusSquaredDistance.empty()) {
+                    double static_rad = sqrt(pointRadiusSquaredDistance[0]);
+                    if(static_rad < _uav_radius)
+                    {
+                        RCLCPP_WARN(this->get_logger(), "Unsafe Trajectory: Hovering");
+                        custom_interface_gym::msg::DesTrajectory des_traj_msg;
+                        des_traj_msg.header.stamp = rclcpp::Clock().now();
+                        des_traj_msg.header.frame_id = "ground_link";
+                        des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+                        _rrt_des_traj_pub->publish(des_traj_msg);
+                        _is_traj_exist = false;
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        if(dynamic_pcd_size == 0) return true;
+
+        
+        // parameters (tune these)
+        const double segment_dt = 0.5;            // duration of each linearized segment
+        const double robot_radius = _uav_radius;    // set this in your class
+        const double obstacle_radius = 0.0001; // set this in your class
+        const double combined_radius = robot_radius + obstacle_radius + _safety_margin;
+
+        // build KD-tree nearest neighbors around current robot start (you already do)
         pcl::PointXYZ searchPoint;
         searchPoint.x = _start_pos(0);
         searchPoint.y = _start_pos(1);
         searchPoint.z = _start_pos(2);
         pointIdxRadiusSearch.clear();
         pointRadiusSquaredDistance.clear();
-        dynamic_kdtree.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-        double dynamic_rad = 5.0;
-        if(!pointRadiusSquaredDistance.empty())
+        int num_obstacles = std::min(dynamic_pcd_size, 10);
+        dynamic_kdtree.nearestKSearch(searchPoint, num_obstacles, pointIdxRadiusSearch, pointRadiusSquaredDistance);
+        bool collision_predicted = false;
+        // For each nearby dynamic obstacle:
+        for(int idx_i = 0; idx_i < num_obstacles; ++idx_i)
         {
-            dynamic_rad = sqrt(pointRadiusSquaredDistance[0]);
-        }
-        if(dynamic_rad < 1.5 * _safety_margin + _uav_radius)
-        {
-            current_state = BACKUP;
-            RCLCPP_WARN(this->get_logger(), "Unsafe Trajectory: backingup");
-            // custom_interface_gym::msg::DesTrajectory des_traj_msg;
-            // des_traj_msg.header.stamp = rclcpp::Clock().now();
-            // des_traj_msg.header.frame_id = "ground_link";
-            // des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
-            // _rrt_des_traj_pub->publish(des_traj_msg);
-            _is_traj_exist = false;
-            return false;
-        }
-        // Ensure both times use the same clock source
-        auto delta_t_c = (rclcpp::Time(odom_time.nanoseconds(), trajstamp.get_clock_type()) - trajstamp).seconds();
-        // std::cout<<"[safety debug] delta T: "<<delta_t<<std::endl;
-        if(!_is_traj_exist) return false;
-        double T = max(0.0, delta_t_c);
-        double traj_time = _traj.getTotalDuration();
-        int num_c = min(n_preds_,static_cast<int>(traj_time*0.5/delta_t));
-        // std::cout<<"[safety debug] checking safe trajectory, delta t = "<<T<<std::endl;
-        
-        for(double t = T; t < traj_time*0.7; t += (traj_time*0.7)/10)
-        {
-            Eigen::Vector4d pos_t;
-            pos_t.head<3>() = _traj.getPos(t);
-            pos_t[3] = t + (trajstamp - now_ros).seconds();
-            pcl::PointXYZ searchPoint;
-            searchPoint.x = pos_t(0);
-            searchPoint.y = pos_t(1);
-            searchPoint.z = pos_t(2);
-            // Ensure both times use the same clock type for subtraction
-            pointIdxRadiusSearch.clear();
-            pointRadiusSquaredDistance.clear();
-            static_kdtree.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-            double static_rad = sqrt(pointRadiusSquaredDistance[0]);
-            if(static_rad < _safety_margin) 
+            int pidx = pointIdxRadiusSearch[idx_i];
+            auto pt = dynamic_cloud->points[pidx];
+            Eigen::Vector3d obs_pos0(pt.x, pt.y, pt.z); // obstacle position at t=0 (now)
+            // Lookup velocity for this obstacle. Make sure dynamic_points_hash uses exact keys or adapt lookup.
+            Eigen::Vector3d obs_vel = dynamic_points_hash[obs_pos0];
+            double dist0 = sqrt(pointRadiusSquaredDistance[idx_i]);
+            if(dist0 < 1.5 * _uav_radius)
             {
-                RCLCPP_WARN(this->get_logger(), "Unsafe Trajectory: Hovering");
-                custom_interface_gym::msg::DesTrajectory des_traj_msg;
-                des_traj_msg.header.stamp = rclcpp::Clock().now();
-                des_traj_msg.header.frame_id = "ground_link";
-                des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
-                _rrt_des_traj_pub->publish(des_traj_msg);
-                _is_traj_exist = false;
+                collision_predicted = true;
+            }
+            if(collision_predicted) 
+            {
+                near_dynamic = true;
+                current_state = BACKUP;
                 return false;
             }
+
         }
-        return true;
+        near_dynamic = false;
+        return true; // no collision predicted
     }
 
     bool reachedBackupWaypoint() 
@@ -2192,50 +2029,6 @@ private:
         Eigen::Vector3d curr_pos = _start_pos;  // or use odom if better
         double dist_to_bkup = (curr_pos - bkup_goal).norm();
         return dist_to_bkup < threshold;  // Threshold, tweak as needed
-    }
-
-
-
-    bool collision_check( Eigen::Vector4d & search_Pt)
-    {   
-
-        if(_is_traj_exist)
-        {
-            // std::cout<<"wrong clock debug 3"<<std::endl;
-
-            pcl::PointXYZ searchPoint;
-            searchPoint.x = search_Pt(0);
-            searchPoint.y = search_Pt(1);
-            searchPoint.z = search_Pt(2);
-            // Ensure both times use the same clock type for subtraction
-            double time_point = search_Pt(3) - PCDstart_time;
-            // std::cout<<"wrong clock debug 3a"<<std::endl;
-
-            pointIdxRadiusSearch.clear();
-            pointRadiusSquaredDistance.clear();
-            static_kdtree.nearestKSearch(searchPoint, 1, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-            
-            double min_dynamic_dist = INFINITY;
-            for (const auto& dyn_obstacle_pair : dynamic_points) 
-            {
-                const Eigen::Vector3d& position = dyn_obstacle_pair.first;
-                const Eigen::Vector3d& velocity = dyn_obstacle_pair.second;
-                // TODO: Replace with actual time difference if needed
-                Vector3d pos_at_t = position + std::min((time_point), 0.0) * velocity;
-                double dist = (search_Pt.head<3>() - pos_at_t).norm();
-                min_dynamic_dist = std::min(min_dynamic_dist, dist);
-            }
-
-            double map_dist = INFINITY;
-            if (!pointRadiusSquaredDistance.empty()) {
-                map_dist = sqrt(pointRadiusSquaredDistance[0]);
-            }
-            double rad = std::min(map_dist, min_dynamic_dist);
-            bool safe = rad > _safety_margin;
-            if(!safe) std::cout<<"point :"<<search_Pt<<" not safe: "<<rad<<std::endl;
-            return safe;
-        }
-        else return true;
     }
 
     bool checkEndOfCommittedPath()

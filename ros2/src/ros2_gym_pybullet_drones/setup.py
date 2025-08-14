@@ -37,7 +37,7 @@ setup(
             'trajectory_generator = ros2_gym_pybullet_drones.trajectory_eg:main',
             'noise_gen = ros2_gym_pybullet_drones.noise_gen:main',
             'model_publisher = ros2_gym_pybullet_drones.model_publisher:main',
-            'vision_360 = ros2_gym_pybullet_drones.vision_360:main',
+            'benchmark_toast = ros2_gym_pybullet_drones.benchmark_TOAST:main',
 
         ],
     },
