@@ -23,6 +23,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DesTrajectory.msg"
   "msg/ImageArray.msg"
   "msg/PcdArray.msg"
+  "msg/DynamicPoint.msg"
+  "msg/DynamicPointCloud.msg"
   DEPENDENCIES geometry_msgs std_msgs geographic_msgs sensor_msgs # Specify dependencies
 )
 

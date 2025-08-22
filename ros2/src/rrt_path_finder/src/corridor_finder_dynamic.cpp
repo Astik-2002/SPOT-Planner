@@ -33,20 +33,13 @@ void safeRegionRrtStarDynamic::setParam(double safety_margin_, double search_mar
 
 void safeRegionRrtStarDynamic::reset() 
 {
-    std::cout<<"reset debug: "<<std::endl;     
-    treeDestruct();
-    std::cout<<"reset debug: "<<std::endl;     
-    
+    treeDestruct();    
     NodeList.clear();
     EndList.clear();
     invalidSet.clear();
     PathList.clear();
-    std::cout<<"reset debug: "<<std::endl;     
-
     best_end_ptr = make_shared<Node_dynamic>();
     root_node = make_shared<Node_dynamic>();
-    std::cout<<"reset debug: "<<std::endl;     
-
     path_exist_status = true;
     inform_status = false;
     global_navi_status = false;
@@ -66,7 +59,7 @@ void safeRegionRrtStarDynamic::setPt(Vector3d startPt, Vector3d endPt, double xl
 {
     start_pt = startPt;
     end_pt   = endPt; 
-    std::cout<<"start pt: "<<startPt.transpose()<<" : endpt: "<<endPt.transpose()<<std::endl;
+    // std::cout<<"start pt: "<<startPt.transpose()<<" : endpt: "<<endPt.transpose()<<std::endl;
 
     x_l = xl; x_h = xh;
     y_l = yl; y_h = yh;
@@ -87,7 +80,7 @@ void safeRegionRrtStarDynamic::setPt(Vector3d startPt, Vector3d endPt, double xl
     assert(weightT > 0.0 && weightT < 1.0);
     max_vel = _max_vel;
     max_radius = 2*max_vel*delta_t;
-    min_distance = sqrt(pow(start_pt(0) - end_pt(0), 2) + pow(start_pt(1) - end_pt(1), 2) + pow(start_pt(2) - end_pt(2), 2)) * ((1-weightT) + weightT / max_vel);
+    min_distance = (end_pt - start_pt).norm() * ((1-weightT) + weightT / max_vel);
     translation_inf = (start_pt + end_pt) / 2.0;
 
     Eigen::Vector3d xtf, ytf, ztf, downward(0, 0, -1);
@@ -104,19 +97,12 @@ void safeRegionRrtStarDynamic::setPt(Vector3d startPt, Vector3d endPt, double xl
     inlier_ratio = sample_portion;
     goal_ratio = goal_portion;
     current_yaw = yaw;
-    std::cout << "[setPt] start: " << start_pt.transpose()
-          << ", end: " << end_pt.transpose()
-          << ", min_distance (raw): " << (end_pt - start_pt).norm()
-          << ", time_weight: " << weightT
-          << ", min_distance (final): " << min_distance
-          << std::endl;
-
-}
-
-void safeRegionRrtStarDynamic::setInput(pcl::PointCloud<pcl::PointXYZ> cloud_in, Eigen::Vector3d origin) {     
-    kdtreeForMap.setInputCloud(cloud_in.makeShared());  
-    CloudIn = cloud_in;
-    pcd_origin = origin;
+    // std::cout << "[setPt] start: " << start_pt.transpose()
+    //       << ", end: " << end_pt.transpose()
+    //       << ", min_distance (raw): " << (end_pt - start_pt).norm()
+    //       << ", time_weight: " << weightT
+    //       << ", min_distance (final): " << min_distance
+    //       << std::endl;
 }
 
 inline double safeRegionRrtStarDynamic::getDis(const NodePtr_dynamic node1, const NodePtr_dynamic node2) {
@@ -182,27 +168,21 @@ inline int safeRegionRrtStarDynamic::checkNodeUpdate(double new_radius, double o
         return 1;
 }
 
+void safeRegionRrtStarDynamic::setInputStatic(pcl::PointCloud<pcl::PointXYZ> cloud_in) 
+{     
+    if(cloud_in.points.size() > 0)
+    {
+        kdtreeForMap.setInputCloud(cloud_in.makeShared());
+    }  
+    CloudIn = cloud_in;
+}
+
 void safeRegionRrtStarDynamic::setInputDynamic(
-    const pcl::PointCloud<pcl::PointXYZ>& cloud_in,
     const vector<pair<Eigen::Vector3d, Eigen::Vector3d>>& _dynamic_points,
     const Eigen::Vector3d& origin,
     double start_time) 
 {
-    for (const auto& point : cloud_in.points) 
-    {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) 
-        {
-            std::cerr << "Invalid point found in cloud: (" 
-                        << point.x << ", " << point.y << ", " << point.z << ")" << std::endl;
-            throw std::runtime_error("Invalid point cloud data");
-        }
-    }
-    if(cloud_in.points.size() > 0)
-    {
-        kdtreeForMap.setInputCloud(cloud_in.makeShared());
-    }
     dynamic_points = _dynamic_points;
-    CloudIn = cloud_in;
     pcd_origin = origin;
     PCDstartTime = start_time;
     buildTemporalGrid(dynamic_points);
@@ -517,6 +497,7 @@ void safeRegionRrtStarDynamic::resetRoot(int root_index) {
         PathList[root_index]->best = true;
         PathList[root_index]->preNode_ptr = nullptr;
         cost_reduction = PathList[root_index]->g;
+        PathList[root_index]->g = 0.0;
         root_node = PathList[root_index];
     }
     if(!target_node) {
@@ -528,7 +509,17 @@ void safeRegionRrtStarDynamic::resetRoot(int root_index) {
         PathList[i]->valid = false;
         cutList.push_back(PathList[i]);
     }
-
+    // std::cout<<"before node cleanup: "<<std::endl;
+    for(auto node : NodeList)
+    {
+        if(node->valid && node->coord[3] < target_node->coord[3])
+        {
+            node->best = false;
+            node->valid = false;
+            cutList.push_back(node);
+        }
+    }
+    // std::cout<<"after node cleanup: "<<std::endl;
     solutionUpdate(cost_reduction, target_node->coord);
 
     for(auto nodeptr:cutList) {
@@ -565,11 +556,32 @@ void safeRegionRrtStarDynamic::solutionUpdate(double cost_reduction, Vector4d ta
 }
 
 void safeRegionRrtStarDynamic::updateHeuristicRegion(NodePtr_dynamic update_end_node) {   
-    double update_cost = update_end_node->g + (getDis(update_end_node->coord.head<3>(), end_pt) + getDis(root_node->coord.head<3>(), commit_root.head<3>()))*((1-weightT) + weightT/max_vel);
-    if(update_cost < best_distance) {  
+    // double update_cost = update_end_node->g + (getDis(update_end_node->coord.head<3>(), end_pt) + getDis(root_node->coord.head<3>(), commit_root.head<3>()))*((1-weightT) + weightT/max_vel);
+    // double update_cost = update_end_node->g + getDis(update_end_node->coord.head<3>(), end_pt)*((1 - weightT) + weightT / max_vel);
+    double spatial_remain = (end_pt - update_end_node->coord.head<3>()).norm();
+    double heuristic_cost = (1 - weightT) * spatial_remain + weightT * (spatial_remain / max_vel);
+    double update_cost = update_end_node->g + heuristic_cost;
+
+    if (update_cost + 1e-6 < min_distance) {
+        update_cost = min_distance;
+    }
+    if(update_cost < best_distance) {
+        // std::cout<<"[update heuristic debug] update_cost: "<<update_cost<<" best distance: "<<best_distance<<" min_distance: "<<min_distance<<" end_node->g: "<<update_end_node->g<<std::endl;
+  
         best_distance = update_cost;
+        if(best_distance < min_distance)
+        {
+            NodePtr_dynamic temp_node = update_end_node;
+            while(temp_node != NULL)
+            {
+                std::cout<<"FUBAR Node coords: "<<temp_node->coord.transpose()<<std::endl;
+                std::cout<<"FUBAR Node g: "<<temp_node->g<<std::endl;
+
+                temp_node = temp_node->preNode_ptr;
+            }
+            throw std::runtime_error("FUBAR code spotted!");
+        }
         elli_l = best_distance;
-        // std::cout<<"[update heuristic debug] update_cost: "<<update_cost<<" min_distance: "<<min_distance<<" end_node->g: "<<update_end_node->g<<std::endl;
         elli_s = sqrt(best_distance * best_distance - min_distance * min_distance);
 
         if(inform_status) {
@@ -609,6 +621,11 @@ Vector4d safeRegionRrtStarDynamic::genSample4d() {
             pt4d(2) = rand_z(eng);
         }
         pt4d(3) = rand_idx(eng);
+        if (!std::isfinite(pt4d[0]) || !std::isfinite(pt4d[1]) || !std::isfinite(pt4d[2]))
+        {
+            std::cerr<<"infinite sample generation error in NOT inform status: "<<std::endl;
+        } 
+
     } else {
         // --- Improved 4D Ellipsoidal Sampling ---
         double us = rand_u(eng);       // Uniform [0,1]
@@ -632,6 +649,10 @@ Vector4d safeRegionRrtStarDynamic::genSample4d() {
         pt_local(2) = bs * cos(thetas);
         pt_local(3) = ts;  // Time component
 
+        if (!std::isfinite(pt_local[0]) || !std::isfinite(pt_local[1]) || !std::isfinite(pt_local[2]))
+        {
+            throw std::runtime_error("Infinite sample generation error in inform status!");
+        }
         // Rotate and translate spatial dimensions (x,y,z)
         pt4d.head<3>() = rotation_inf * pt_local.head<3>() + translation_inf;
         pt4d(3) = root_node->coord(3) + pt_local(3);  // Offset from root time
@@ -650,7 +671,7 @@ inline NodePtr_dynamic safeRegionRrtStarDynamic::genNewNode(Vector4d & pt_sample
 
     double dis = ST_dis.first;
     double dis_T = ST_dis.second;
-    if(dis_T < 0.0) std::cout<<"[invalid dT in genNewNode]"<<std::endl;
+    // if(dis_T < 0.0) std::cout<<"[invalid dT in genNewNode]"<<std::endl;
     Vector4d center;
     if(dis_T > 2*delta_t) {
         center[3] = node_nearest_ptr->coord[3] + 2*delta_t;
@@ -735,7 +756,7 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
     float range = sqrt(pow(newPtr->radius * 2.0f,2) + pow(2.0 * delta_t, 2));
     float pos[4] = {(float)newPtr->coord(0), (float)newPtr->coord(1), (float)newPtr->coord(2), (float)newPtr->coord(3)};
     struct kdres *presults = kd_nearest_range4f(kdTree_, pos[0], pos[1], pos[2], pos[3], range);
-
+    const double t0 = root_node->coord(3);
     vector<NodePtr_dynamic> nearPtrList;
     bool isInvalid = false;
     while(!kd_res_end(presults)) 
@@ -744,12 +765,6 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
         
         // Find the existing shared_ptr that owns this node
         NodePtr_dynamic nearPtr;
-        // for (const auto& node : NodeList) {
-        //     if (node.get() == raw_ptr) {
-        //         nearPtr = node;
-        //         break;
-        //     }
-        // }
         auto it = node_raw_to_shared_map.find(raw_ptr);
         if (it != node_raw_to_shared_map.end())
         {
@@ -804,23 +819,26 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
 
     for(auto nodeptr:nearPtrList) {
         NodePtr_dynamic nearPtr = nodeptr;
-        int res = nearPtr->rel_id;
-        double dis = nearPtr->rel_dis;
-        double cost = nearPtr->g + dis;
-        
-        if(res == -1) {
-            if(cost < min_cost) {
-                min_cost = cost;
-                newPtr->preNode_ptr = nearPtr;
-                newPtr->g = min_cost;
-                lstParentPtr->nxtNode_ptr.pop_back();
-                lstParentPtr = nearPtr;
-                lstParentPtr->nxtNode_ptr.push_back(newPtr);
-            }
-            nearVertex.push_back(nearPtr);
-        }      
-        nearPtr->rel_id = -2;
-        nearPtr->rel_dis = -1.0;
+        if(std::isfinite(nearPtr->g) && nearPtr->coord[3] >= t0)
+        {
+            int res = nearPtr->rel_id;
+            double dis = nearPtr->rel_dis;
+            double cost = nearPtr->g + dis;
+            
+            if(res == -1) {
+                if(cost < min_cost) {
+                    min_cost = cost;
+                    newPtr->preNode_ptr = nearPtr;
+                    newPtr->g = min_cost;
+                    lstParentPtr->nxtNode_ptr.pop_back();
+                    lstParentPtr = nearPtr;
+                    lstParentPtr->nxtNode_ptr.push_back(newPtr);
+                }
+                nearVertex.push_back(nearPtr);
+            }      
+            nearPtr->rel_id = -2;
+            nearPtr->rel_dis = -1.0;
+        }
     }
 
     for(int i = 0; i < int(nearVertex.size()); i++) {
@@ -858,6 +876,21 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
             newPtr->nxtNode_ptr.push_back(nearPtr);
         }
     }
+    // if(newPtr->g < 0 && !std::isfinite(newPtr->g))
+    // {
+    //     std::cout<<"################## trouble in rewiring: "<<std::endl;
+    //     std::cout<<"coords: "<<newPtr->coord.transpose()<<std::endl;
+    //     std::cout<<"cost: "<<newPtr->g<<std::endl;
+    //     auto temp_node = newPtr;
+    //     while(temp_node)
+    //     {
+    //         std::cout<<"debug coords: "<<temp_node->coord.transpose()<<std::endl;
+    //         std::cout<<"debug cost: "<<temp_node->g<<std::endl;
+    //         temp_node = temp_node->preNode_ptr;
+    //     }
+    //     throw std::runtime_error("Negative cost values!");
+
+    // }
 }
 
 void safeRegionRrtStarDynamic::recordNode(NodePtr_dynamic new_node) {
@@ -967,11 +1000,15 @@ void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double roo
         {
             std::cerr << "Invalid point coordinates in gen sample: " 
                       << pt_sample.transpose() << std::endl;
-            return;  // Or throw an exception
+            return;
         }
         NodePtr_dynamic node_nearest_ptr = findNearestVertex4d(pt_sample);
         
-        if(!node_nearest_ptr->valid || !node_nearest_ptr) {
+        if(!node_nearest_ptr->valid || !node_nearest_ptr || node_nearest_ptr->coord[3] < root_node->coord[3]) {
+            if(node_nearest_ptr->coord[3] < root_node->coord[3])
+            {
+                node_nearest_ptr->valid = false;
+            }
             continue;
         }
         if(node_nearest_ptr->coord(3) >= pt_sample(3)) 
@@ -982,9 +1019,9 @@ void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double roo
         NodePtr_dynamic node_new_ptr = genNewNode(pt_sample, node_nearest_ptr);
         if (!std::isfinite(node_new_ptr->coord[0]) || !std::isfinite(node_new_ptr->coord[1]) || !std::isfinite(node_new_ptr->coord[2]) || !std::isfinite(node_new_ptr->coord[3])) 
         {
-            std::cerr << "Invalid point coordinates in gen sample: " 
+            std::cerr << "Invalid point coordinates in gen new node: " 
                       << node_new_ptr->coord.transpose() << std::endl;
-            return;  // Or throw an exception
+            return;
         }
         if(node_new_ptr->coord(2) < (z_l + safety_margin) || node_new_ptr->radius < safety_margin) {
             continue;
@@ -993,6 +1030,11 @@ void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double roo
             continue;
         }
         treeRewire(node_new_ptr, node_nearest_ptr);  
+        if (std::isinf(node_new_ptr->g) && node_new_ptr->g < 0) 
+        {
+            continue;
+            // throw std::runtime_error("Negative infinity g detected in expansion!");
+        }
 
         if(!node_new_ptr->valid) {
             continue;
@@ -1027,7 +1069,7 @@ void safeRegionRrtStarDynamic::SafeRegionRefine( double time_limit )
     /*  Every time the refine function is called, new samples are continuously generated and the tree is continuously rewired, hope to get a better solution  */
     /*  The refine process is mainly same as the initialization of the tree  */
     auto time_bef_refine = std::chrono::steady_clock::now();
-    //std::cout<<"in refine loop"<<std::endl;
+    // std::cout<<"in refine loop"<<std::endl;
 
     float pos[4];
     while( true )
@@ -1040,7 +1082,15 @@ void safeRegionRrtStarDynamic::SafeRegionRefine( double time_limit )
         } 
         Vector4d pt_sample =  genSample4d();
         NodePtr_dynamic node_nearest_ptr = findNearestVertex4d(pt_sample);
-        if(!node_nearest_ptr->valid || node_nearest_ptr == NULL) continue;
+        if(!node_nearest_ptr->valid || !node_nearest_ptr || node_nearest_ptr->coord[3] < root_node->coord[3]) 
+        {
+            if(node_nearest_ptr != NULL && node_nearest_ptr->coord[3] < root_node->coord[3])
+            {
+                node_nearest_ptr->valid = false;
+            }
+            continue;
+        }
+
         if(node_nearest_ptr->coord(3) >= pt_sample(3))
         {
            pt_sample(3) = node_nearest_ptr->coord(3) + static_cast<float>(uniform_real_distribution<double>(delta_t/2, 2 * delta_t)(eng));
@@ -1059,6 +1109,11 @@ void safeRegionRrtStarDynamic::SafeRegionRefine( double time_limit )
         // {
         //     std::cout<<"refine debug: child ptr added to root node"<<std::endl;
         // }
+        if (std::isinf(node_new_ptr->g) && node_new_ptr->g < 0) 
+        {
+            continue;
+            // throw std::runtime_error("Negative infinity g detected in refine!");
+        }
         if( node_new_ptr->valid == false ) continue;
         if(checkEnd( node_new_ptr )){
             if( !inform_status ) 

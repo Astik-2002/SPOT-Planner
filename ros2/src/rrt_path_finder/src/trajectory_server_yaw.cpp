@@ -28,7 +28,8 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr yaw_target_sub;
     rclcpp::Publisher<custom_interface_gym::msg::TrajMsg>::SharedPtr command_pub;
     rclcpp::TimerBase::SharedPtr command_timer;
-
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr server_state_pub;
+    rclcpp::TimerBase::SharedPtr state_timer;
     // Store current trajectory
     std::vector<Eigen::Matrix<double, 3, 6>> current_coefficients;  // Vector of (3, D+1) matrices for each trajectory segment
     std::vector<double> segment_durations;
@@ -84,9 +85,30 @@ TrajectoryServerYaw()
             "corridor_endpoint", 1, std::bind(&TrajectoryServerYaw::rcvYawCallback, this, std::placeholders::_1));
 
         command_pub = this->create_publisher<custom_interface_gym::msg::TrajMsg>("rrt_command",10);
+        server_state_pub = this->create_publisher<std_msgs::msg::String>("server_state", 10);
         // Timer for periodic command updates
         command_timer = this->create_wall_timer(
             std::chrono::milliseconds(10), std::bind(&TrajectoryServerYaw::commandCallback, this));
+        state_timer = this->create_wall_timer(
+            std::chrono::milliseconds(200), std::bind(&TrajectoryServerYaw::publishServerState, this));
+    }
+    
+    void publishServerState()
+    {
+        std_msgs::msg::String state_msg;
+
+        if (!has_trajectory || is_aborted) {
+            state_msg.data = "IDLE"; // no trajectory
+        } else {
+            double elapsed = (this->get_clock()->now() - _start_time).seconds();
+            if (elapsed > _traj.getTotalDuration()) {
+                state_msg.data = "IDLE"; // completed trajectory
+            } else {
+                state_msg.data = "ACTIVE"; // currently following
+            }
+        }
+
+        server_state_pub->publish(state_msg);
     }
 
     void rcvOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
@@ -95,13 +117,7 @@ TrajectoryServerYaw()
         current_pos[0] = _odom.pose.pose.position.x;
         current_pos[1] = _odom.pose.pose.position.y;
         current_pos[2] = _odom.pose.pose.position.z;
-        if(_is_target_receive)
-        {
-            if((end_pos-current_pos).norm() < 2.0)
-            {
-                _is_goal_arrive = true;
-            }
-        }
+        
         auto& orientation = _odom.pose.pose.orientation;
         double siny_cosp = 2.0 * (orientation.w * orientation.z + orientation.x * orientation.y);
         double cosy_cosp = 1.0 - 2.0 * (orientation.y * orientation.y + orientation.z * orientation.z);
@@ -131,26 +147,26 @@ TrajectoryServerYaw()
         yaw_target(0) = yaw_msg->pose.position.x;
         yaw_target(1) = yaw_msg->pose.position.y;
         yaw_target(2) = yaw_msg->pose.position.z;
-        std::cout<<"[yaw debug]: yaw target received"<<std::endl; 
+        // std::cout<<"[yaw debug]: yaw target received"<<std::endl; 
         
     }
 
     void trajectoryCallback(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
     {
-        std::cout<<"in trajectory callback"<<std::endl;
+        // std::cout<<"in trajectory callback"<<std::endl;
 
         switch (msg->action)
         {
         case custom_interface_gym::msg::DesTrajectory::ACTION_ADD:
-            std::cout<<"case Add"<<std::endl;
+            // std::cout<<"case Add"<<std::endl;
             handleAddTrajectory(msg);
             break;
         case custom_interface_gym::msg::DesTrajectory::ACTION_BACKUP:
-            std::cout<<"case backup"<<std::endl;
+            // std::cout<<"case backup"<<std::endl;
             handleBackupTrajectory(msg);
             break;
         case custom_interface_gym::msg::DesTrajectory::ACTION_WARN_FINAL:
-            std::cout<<"case Final"<<std::endl;
+            // std::cout<<"case Final"<<std::endl;
             handleFinalTrajectory();
             break;
         default:
@@ -164,10 +180,10 @@ TrajectoryServerYaw()
     {
         if(msg->trajectory_id < trajectory_id)
         {
-            std::cout<<"backward trajectory invalid"<<std::endl;
+            // std::cout<<"backward trajectory invalid"<<std::endl;
             return;
         }
-        std::cout<<"in handle add trajectory callback"<<std::endl;
+        // std::cout<<"in handle add trajectory callback"<<std::endl;
         has_trajectory = true;
         is_aborted = false;
         hover_command_sent = false;
@@ -199,8 +215,8 @@ TrajectoryServerYaw()
         }
         // for (auto mat : current_coefficients)
         // {
-        //     std::cout<<"######## mat #########"<<std::endl;
-        //     std::cout<<mat<<std::endl;
+        //     // std::cout<<"######## mat #########"<<std::endl;
+        //     // std::cout<<mat<<std::endl;
         // }
         _traj.setParameters(segment_durations, current_coefficients);
         if(msg->yaw_enabled == custom_interface_gym::msg::DesTrajectory::YAW_ENABLED_TRUE)
@@ -215,7 +231,7 @@ TrajectoryServerYaw()
             yaw_interval = msg->yaw_interval;
             yaw_traj.setUniformBspline(yaw_control_points, 1, yaw_interval);
         }
-        std::cout<<"in handle add trajectory callback, traj set successfully"<<std::endl;
+        // std::cout<<"in handle add trajectory callback, traj set successfully"<<std::endl;
 
         // RCLCPP_WARN(this->get_logger(), "Added trajectory with %lu segments.", msg->num_segment);
         
@@ -252,8 +268,8 @@ TrajectoryServerYaw()
             traj_msg.position.y = end_pos[1];
             traj_msg.position.z = end_pos[2];
             
-            std::cout<<"[Goal setting] current position: "<<current_pos[0]<<":"<<current_pos[1]<<":"<<current_pos[2]<<std::endl;
-            std::cout<<"[Goal setting] command position: "<<traj_msg.position.x<<":"<<traj_msg.position.y<<":"<<traj_msg.position.z<<std::endl;
+            // std::cout<<"[Goal setting] current position: "<<current_pos[0]<<":"<<current_pos[1]<<":"<<current_pos[2]<<std::endl;
+            // std::cout<<"[Goal setting] command position: "<<traj_msg.position.x<<":"<<traj_msg.position.y<<":"<<traj_msg.position.z<<std::endl;
 
             // Publish the message
             traj_msg.hover = true;
@@ -284,7 +300,7 @@ TrajectoryServerYaw()
             des_jerk = _traj.getJer(elapsed);
         }
 
-        // std::cout<<"elapsed: "<<elapsed<<std::endl;
+        // // std::cout<<"elapsed: "<<elapsed<<std::endl;
         custom_interface_gym::msg::TrajMsg traj_msg;
         traj_msg.header.stamp = rclcpp::Clock().now();
         traj_msg.header.frame_id = "ground_link"; 
@@ -318,12 +334,12 @@ TrajectoryServerYaw()
         }
         
         traj_msg.yaw = yaw_des;
-        std::cout<<"debug states: "<<std::endl;
-        std::cout<<"Elapsed: "<<elapsed<<std::endl;
+        // std::cout<<"debug states: "<<std::endl;
+        // std::cout<<"Elapsed: "<<elapsed<<std::endl;
 
-        std::cout<<"POS x: "<<des_pos.x()<<" y: "<<des_pos.y()<<" z: "<<des_pos.z()<<std::endl;
-        std::cout<<"Vel x: "<<des_vel.x()<<" y: "<<des_vel.y()<<" z: "<<des_vel.z()<<std::endl;
-        std::cout<<"Yaw: "<<yaw_des<<std::endl;
+        // std::cout<<"POS x: "<<des_pos.x()<<" y: "<<des_pos.y()<<" z: "<<des_pos.z()<<std::endl;
+        // std::cout<<"Vel x: "<<des_vel.x()<<" y: "<<des_vel.y()<<" z: "<<des_vel.z()<<std::endl;
+        // std::cout<<"Yaw: "<<yaw_des<<std::endl;
 
         // std::cout<<"[Traj follow] error in position: "<<(current_pos - des_pos).norm()<<std::endl;
 
@@ -333,7 +349,7 @@ TrajectoryServerYaw()
 
     void handleBackupTrajectory(const custom_interface_gym::msg::DesTrajectory::SharedPtr msg)
     {
-        std::cout<<"in handle backup trajectory callback"<<std::endl;
+        // std::cout<<"in handle backup trajectory callback"<<std::endl;
         has_trajectory = true;
         is_aborted = false;
         hover_command_sent = false;
@@ -363,7 +379,7 @@ TrajectoryServerYaw()
 
         }
         _traj.setParameters(segment_durations, current_coefficients);
-        std::cout<<"in handle backup trajectory callback, traj set successfully"<<std::endl;
+        // std::cout<<"in handle backup trajectory callback, traj set successfully"<<std::endl;
         
     }
 

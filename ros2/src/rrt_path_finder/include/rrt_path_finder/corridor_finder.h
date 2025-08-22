@@ -9,7 +9,7 @@
 #include <pcl/search/kdtree.h>
 #include <pcl/search/impl/kdtree.hpp>
 
-#include "datatype.h"
+#include "datatype_shared.h"
 
 class safeRegionRrtStar
 {
@@ -27,17 +27,18 @@ class safeRegionRrtStar
 		vector<float>   pointRadiusSquaredDistance;        
 		
 		// All nodes,  nodes reach the target
-		vector<NodePtr> NodeList, EndList;
-		
+		vector<NodePtr_shared> NodeList, EndList;
+		std::unordered_map<Node_shared*, NodePtr_shared> node_raw_to_shared_map;
+
 		// all nodes in the current path, for easy usage in root re-decleration 
-		vector<NodePtr> PathList, invalidSet;
+		vector<NodePtr_shared> PathList, invalidSet;
 
 		vector<Eigen::Vector3d> selectedNodeList, sampleList;
 		// record the current best node which can reach the target and has the lowest path cost
-		NodePtr best_end_ptr;
+		NodePtr_shared best_end_ptr;
 
 		// record the root of the rapidly exploring tree
-		NodePtr root_node;
+		NodePtr_shared root_node;
 
 		// start point,   target point,  centroid point of the ellipsoide sampling region
 		Eigen::Vector3d start_pt, end_pt, inform_centroid, commit_root, pcd_origin;
@@ -101,33 +102,33 @@ class safeRegionRrtStar
 
 		/* operations on the tree */
 		void treeRepair   ( double time_limit, vector< pair<Eigen::Vector3d, double> > & node_list);
-		void treePrune( NodePtr newPtr );
-		void treeRewire( NodePtr node_new_ptr, NodePtr node_nearst_ptr );
-		void clearBranchW(NodePtr node_delete); // weak branch cut:    clear branches while avoid deleting the nodes on the best path
-		void clearBranchS(NodePtr node_delete); // strong branch cut:  clear all nodes on a branch
-		void updateHeuristicRegion( NodePtr update_end_node );
-		void recordNode(NodePtr new_node);		
+		void treePrune( NodePtr_shared newPtr );
+		void treeRewire( NodePtr_shared node_new_ptr, NodePtr_shared node_nearest_ptr );
+		void clearBranchW(NodePtr_shared node_delete); // weak branch cut:    clear branches while avoid deleting the nodes on the best path
+		void clearBranchS(NodePtr_shared node_delete); // strong branch cut:  clear all nodes on a branch
+		void updateHeuristicRegion( NodePtr_shared update_end_node );
+		void recordNode(NodePtr_shared new_node);		
 		void removeInvalid();
 		void treeDestruct();
 		void tracePath();
 
 		/* utility functions */
-        double getDis(const NodePtr node1, const NodePtr node2);
-		double getDis(const NodePtr node1, const Eigen::Vector3d & pt);
+        double getDis(const NodePtr_shared node1, const NodePtr_shared node2);
+		double getDis(const NodePtr_shared node1, const Eigen::Vector3d & pt);
 		double getDis(const Eigen::Vector3d & p1, const Eigen::Vector3d & p2);
 		inline Eigen::Vector3d genSample();
 		inline Eigen::Vector3d getRootCoords();
 		inline double radiusSearch(Eigen::Vector3d & pt);
 		inline double radiusSearchCollisionPred(Eigen::Vector3d & pt);
-		inline NodePtr genNewNode( Eigen::Vector3d & pt, NodePtr node_nearst_ptr );
-		inline NodePtr findNearstVertex( Eigen::Vector3d & pt );
-		inline NodePtr findNearst( Eigen::Vector3d & pt );
+		inline NodePtr_shared genNewNode( Eigen::Vector3d & pt, NodePtr_shared node_nearest_ptr );
+		inline NodePtr_shared findnearestVertex( Eigen::Vector3d & pt );
+		inline NodePtr_shared findnearest( Eigen::Vector3d & pt );
 		inline double checkRadius(Eigen::Vector3d & pt);
-		inline bool checkValidEnd(NodePtr endPtr);
-		inline bool checkEnd( NodePtr ptr );
+		inline bool checkValidEnd(NodePtr_shared endPtr);
+		inline bool checkEnd( NodePtr_shared ptr );
 		inline int  checkNodeUpdate  ( double new_radius, double old_radius);
-		inline int  checkNodeRelation( double dis, NodePtr node_1, NodePtr node_2 );
-		inline bool isSuccessor(NodePtr curPtr, NodePtr nearPtr);
+		inline int  checkNodeRelation( double dis, NodePtr_shared node_1, NodePtr_shared node_2 );
+		inline bool isSuccessor(NodePtr_shared curPtr, NodePtr_shared nearPtr);
 		bool checkTrajPtCol(Eigen::Vector3d & pt);
 		Eigen::Vector3d computeNoiseStd(const Eigen::Vector3d& point);
 		bool isInFOV(const Eigen::Vector3d& pt);
@@ -138,7 +139,7 @@ class safeRegionRrtStar
 			return make_pair(Path, Radius);
 		};
 		
-		vector<NodePtr> getTree()
+		vector<NodePtr_shared> getTree()
 		{
 			return NodeList;
 		};

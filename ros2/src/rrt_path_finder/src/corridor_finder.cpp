@@ -43,8 +43,8 @@ void safeRegionRrtStar::reset()
     invalidSet.clear();
     PathList.clear();
 
-    best_end_ptr = new Node();
-    root_node    = new Node();
+    best_end_ptr = make_shared<Node_shared>();
+    root_node    = make_shared<Node_shared>();
 
     path_exist_status  = true;
     inform_status      = false;
@@ -117,16 +117,16 @@ void safeRegionRrtStar::setInputforCollision(pcl::PointCloud<pcl::PointXYZ> clou
     kdtreeForCollisionPred.setInputCloud(cloud_in.makeShared());
 }
 
-inline double safeRegionRrtStar::getDis(const NodePtr node1, const NodePtr node2){
-      return sqrt(pow(node1->coord(0) - node2->coord(0), 2) + pow(node1->coord(1) - node2->coord(1), 2) + pow(node1->coord(2) - node2->coord(2), 2) );
+inline double safeRegionRrtStar::getDis(const NodePtr_shared node1, const NodePtr_shared node2){
+    return (node1->coord - node2->coord).norm();
 }
 
-inline double safeRegionRrtStar::getDis(const NodePtr node1, const Vector3d & pt){
-      return sqrt(pow(node1->coord(0) - pt(0), 2) + pow(node1->coord(1) - pt(1), 2) + pow(node1->coord(2) - pt(2), 2) );
+inline double safeRegionRrtStar::getDis(const NodePtr_shared node1, const Vector3d & pt){
+    return (node1->coord - pt).norm();
 }
 
 inline double safeRegionRrtStar::getDis(const Vector3d & p1, const Vector3d & p2){
-      return sqrt(pow(p1(0) - p2(0), 2) + pow(p1(1) - p2(1), 2) + pow(p1(2) - p2(2), 2) );
+    return (p1 - p2).norm();
 }
 
 inline double safeRegionRrtStar::radiusSearch( Vector3d & search_Pt)
@@ -174,45 +174,52 @@ inline double safeRegionRrtStar::radiusSearchCollisionPred( Vector3d & search_Pt
     return min(radius, double(max_radius));
 }
 
-void safeRegionRrtStar::clearBranchW(NodePtr node_delete) // Weak branch cut: if a child of a node is on the current best path, keep the child
-{   // std::cout<<"clear branch seg1"<<std::endl;
+void safeRegionRrtStar::clearBranchW(NodePtr_shared node_delete) // if a child node is on current best path, don't remove it
+{
     if (!node_delete) {
-        std::cerr << "[Error] Node to delete is null in clearBranchW()" << std::endl;
+        cerr << "[Error] Node to delete is null in clearBranchW()" << endl;
         return;
     }
-    // std::cout<<"clear branch seg2, nxt-ptr size: "<<node_delete->nxtNode_ptr.size()<<std::endl;
     
-    if (!node_delete->nxtNode_ptr.empty())
-    {
-        for (auto nodeptr : node_delete->nxtNode_ptr) 
-        {
-            if (!nodeptr->best) {
-                // std::cout<<"clear branch seg5"<<std::endl;
-                if (nodeptr->valid) {
-                    // std::cout<<"clear branch seg6"<<std::endl;
-                    invalidSet.push_back(nodeptr);
-                }
-                // std::cout<<"clear branch seg7"<<std::endl;
-                nodeptr->valid = false;
-                clearBranchW(nodeptr);
+    if (!node_delete->valid) return;
+
+    for (auto child : node_delete->nxtNode_ptr) {
+        if (!child || !child->valid) continue;
+
+        if (!child->best) {
+            if (find(invalidSet.begin(), invalidSet.end(), child) == invalidSet.end()) {
+                invalidSet.push_back(child);
             }
+            child->valid = false;
+            clearBranchW(child);
         }
     }
 }
 
-void safeRegionRrtStar::clearBranchS(NodePtr node_delete) // Strong branch cut: no matter how, cut all nodes in this branch
-{     
-    for( auto nodeptr: node_delete->nxtNode_ptr ){
-        if( nodeptr->valid)
-            invalidSet.push_back(nodeptr);
-            nodeptr->valid = false;
-            clearBranchS(nodeptr);
+void safeRegionRrtStar::clearBranchS(NodePtr_shared node_delete) { // remove every child
+    if (!node_delete) {
+        cerr << "[Error] Node to delete is null in clearBranchS()" << endl;
+        return;
+    }
+    
+    if (!node_delete->valid) return;
+
+    for (auto child : node_delete->nxtNode_ptr) {
+        if (!child) continue;
+        
+        if (child->valid) {
+            if (find(invalidSet.begin(), invalidSet.end(), child) == invalidSet.end()) {
+                invalidSet.push_back(child);
+            }
+            child->valid = false;
+        }
+        clearBranchS(child);
     }
 }
 
-void safeRegionRrtStar::treePrune(NodePtr newPtr)
+void safeRegionRrtStar::treePrune(NodePtr_shared newPtr)
 {     
-    NodePtr ptr = newPtr;
+    NodePtr_shared ptr = newPtr;
     if( ptr->g + ptr->f > best_distance ){ // delete it and all its branches
         // std::cout<<"x:"<<ptr->coord[0]<<" y:"<<ptr->coord[1]<<" z:"<<ptr->coord[2]<<" g:"<<ptr->g<<" f:"<<ptr->f<<" bd:"<<best_distance<<std::endl;
         ptr->invalid_in_prune = true;
@@ -224,75 +231,55 @@ void safeRegionRrtStar::treePrune(NodePtr newPtr)
 
 void safeRegionRrtStar::removeInvalid()
 {     
-    // std::cout<<"[backup debug] seg check 3"<<std::endl;
+    std::cout<<"[backup debug] seg check 3"<<std::endl;
 
-    // std::cout<<"[root debug] seg check 7"<<std::endl;
+    std::cout<<"[root debug] seg check 7"<<std::endl;
 
-    vector<NodePtr> UpdateNodeList;
-    vector<NodePtr> UpdateEndList;
+    vector<NodePtr_shared> UpdateNodeList;
+    vector<NodePtr_shared> UpdateEndList;
+    node_raw_to_shared_map.clear();
     kd_clear(kdTree_);
-    // std::cout<<"[root debug] seg check 8"<<std::endl;
+    std::cout<<"[root debug] seg check 8"<<std::endl;
 
     for(auto nodeptr:NodeList){ // Go through all nodes, record all valid ones
         if(nodeptr->valid){
           float pos[3] = {(float)nodeptr->coord(0), (float)nodeptr->coord(1), (float)nodeptr->coord(2)};
-          kd_insertf(kdTree_, pos, nodeptr);
-
+          kd_insertf(kdTree_, pos, nodeptr.get());
+          node_raw_to_shared_map[nodeptr.get()] = nodeptr;
           UpdateNodeList.push_back(nodeptr);
-
           if( checkEnd(nodeptr))
               UpdateEndList.push_back(nodeptr);
         }
     }
 
-    // std::cout<<"[root debug] seg check 9"<<std::endl;
-    NodeList.clear();
-    EndList.clear();
+    std::cout<<"[root debug] seg check 9"<<std::endl;
+    NodeList = move(UpdateNodeList);
+    EndList = move(UpdateEndList);
+    auto invalidNodes = invalidSet;
+    invalidSet.clear();
+    std::cout<<"[root debug] seg check 10"<<std::endl;
 
-    NodeList = UpdateNodeList;
-    EndList  = UpdateEndList;
-    // std::cout<<"[root debug] seg check 10"<<std::endl;
+    for(auto nodeptr : invalidNodes) {
+        if(!nodeptr) continue;
 
-    // Now we should deal with all invalid nodes, broken all its related connections
-    for(int i = 0; i < int(invalidSet.size()); i++ ){
-        NodePtr nodeptr = invalidSet[i];
-
-        if(nodeptr->preNode_ptr != NULL){ // let this node's father forget it
-            nodeptr->change = true;
+        if(nodeptr->preNode_ptr) {
+            auto& children = nodeptr->preNode_ptr->nxtNode_ptr;
             
-            vector<NodePtr> child = nodeptr->preNode_ptr->nxtNode_ptr;        
-            nodeptr->preNode_ptr->nxtNode_ptr.clear();
-            for(auto ptr: child){
-                if( ptr->change == true ) 
-                    continue;
-                else
-                    nodeptr->preNode_ptr->nxtNode_ptr.push_back(ptr);
+            children.erase(
+                remove(children.begin(), children.end(), nodeptr),
+                children.end()
+            );
+        }
+
+        for(auto childptr : nodeptr->nxtNode_ptr) {
+            if(childptr && childptr->valid && childptr->preNode_ptr) {
+                childptr->preNode_ptr = nullptr;
             }
         }
+        
+        nodeptr->nxtNode_ptr.clear();
     }
-    // std::cout<<"[root debug] seg check 11"<<std::endl;
-
-    vector<NodePtr> deleteList;
-    for(int i = 0; i < int(invalidSet.size()); i++ ){
-        NodePtr nodeptr = invalidSet[i];
-
-        for(auto childptr: nodeptr->nxtNode_ptr) // let this node's children forget it
-        {   
-            if(childptr -> valid) 
-                childptr->preNode_ptr = NULL;
-        }
-
-        deleteList.push_back(nodeptr);
-    }
-    // std::cout<<"[root debug] seg check 12"<<std::endl;
-
-    invalidSet.clear();
-    for(int i = 0; i < int(deleteList.size()); i++)
-    {
-        NodePtr ptr = deleteList[i];
-        if(ptr!=NULL) delete ptr;
-    }
-    // std::cout<<"[root debug] seg check 13"<<std::endl;
+    std::cout<<"[root debug] seg check 11"<<std::endl;
 
 }
 
@@ -307,7 +294,7 @@ void safeRegionRrtStar::resetRoot(Vector3d & target_coord)
     std::cout<<"[root debug] prev root: "<<root_node->coord.transpose()<<std::endl;
     std::cout<<"[root debug] new root: "<<target_coord.transpose()<<std::endl;
 
-    NodePtr lstNode = PathList.front();
+    NodePtr_shared lstNode = PathList.front();
     
     if(getDis(lstNode, target_coord) < lstNode->radius){
         global_navi_status = true;
@@ -318,7 +305,7 @@ void safeRegionRrtStar::resetRoot(Vector3d & target_coord)
     double cost_reduction = 0;
 
     commit_root = target_coord;
-    vector<NodePtr> cutList;
+    vector<NodePtr_shared> cutList;
     
     for(auto nodeptr:NodeList)
     {
@@ -328,7 +315,7 @@ void safeRegionRrtStar::resetRoot(Vector3d & target_coord)
 
     bool delete_root = false;
 
-    NodePtr temp_root = NULL;
+    NodePtr_shared temp_root = NULL;
     double min_dist = 1000000000.0;
     int root_index;
     for(int i=0; i<PathList.size(); i++)
@@ -363,18 +350,20 @@ void safeRegionRrtStar::resetRoot(Vector3d & target_coord)
         cutList.push_back(PathList[i]);
     }
 
-    // std::cout<<"[root debug] seg check 4"<<std::endl;
+    std::cout<<"[root debug] seg check 4"<<std::endl;
 
     solutionUpdate(cost_reduction, target_coord);
-    // std::cout<<"[root debug] seg check 5"<<std::endl;
+    std::cout<<"[root debug] seg check 5"<<std::endl;
 
     for(auto nodeptr:cutList){
         invalidSet.push_back(nodeptr);
         clearBranchW(nodeptr);
     }
-    // std::cout<<"[root debug] seg check 6"<<std::endl;
+    std::cout<<"[root debug] seg check 6"<<std::endl;
 
     removeInvalid();
+    std::cout<<"[root debug] out of reset root debug:"<<std::endl;
+
 }
 
 void safeRegionRrtStar::solutionUpdate(double cost_reduction, Vector3d target)
@@ -400,7 +389,7 @@ void safeRegionRrtStar::solutionUpdate(double cost_reduction, Vector3d target)
     best_distance -= cost_reduction;
 }
 
-void safeRegionRrtStar::updateHeuristicRegion(NodePtr update_end_node)
+void safeRegionRrtStar::updateHeuristicRegion(NodePtr_shared update_end_node)
 {   
     /*  This function update the heuristic hype-ellipsoid sampling region once and better path has been found  */
     // Update the up-to-date traversal and conjugate diameter of the ellipsoid.
@@ -420,7 +409,7 @@ void safeRegionRrtStar::updateHeuristicRegion(NodePtr update_end_node)
         }
 
         // update the nodes in the new best path to be marked as best
-        NodePtr ptr = update_end_node;
+        NodePtr_shared ptr = update_end_node;
         while( ptr != NULL  ) 
         {  
             ptr->best = true;
@@ -510,17 +499,17 @@ bool safeRegionRrtStar::isInFOV(const Eigen::Vector3d& pt)
     return (fabs(yaw_diff) <= (h_fov / 2.0)) && (fabs(elevation) <= (v_fov / 2.0));
 }
 
-inline NodePtr safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr node_nearst_ptr )
+inline NodePtr_shared safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr_shared node_nearest_ptr )
 {
-    double dis       = getDis(node_nearst_ptr, pt_sample);
+    double dis       = getDis(node_nearest_ptr, pt_sample);
 
     Vector3d center;
-    if(dis > node_nearst_ptr->radius)
+    if(dis > node_nearest_ptr->radius)
     {
-        double steer_dis = node_nearst_ptr->radius / dis;
-        center(0) = node_nearst_ptr->coord(0) + (pt_sample(0) - node_nearst_ptr->coord(0)) * steer_dis;
-        center(1) = node_nearst_ptr->coord(1) + (pt_sample(1) - node_nearst_ptr->coord(1)) * steer_dis;
-        center(2) = node_nearst_ptr->coord(2) + (pt_sample(2) - node_nearst_ptr->coord(2)) * steer_dis;
+        double steer_dis = node_nearest_ptr->radius / dis;
+        center(0) = node_nearest_ptr->coord(0) + (pt_sample(0) - node_nearest_ptr->coord(0)) * steer_dis;
+        center(1) = node_nearest_ptr->coord(1) + (pt_sample(1) - node_nearest_ptr->coord(1)) * steer_dis;
+        center(2) = node_nearest_ptr->coord(2) + (pt_sample(2) - node_nearest_ptr->coord(2)) * steer_dis;
     }
     else
     {
@@ -532,7 +521,7 @@ inline NodePtr safeRegionRrtStar::genNewNode( Vector3d & pt_sample, NodePtr node
     double radius_ = radiusSearch( center );
     double h_dis_  = getDis(center, end_pt);
 
-    NodePtr node_new_ptr = new Node( center, radius_, INFINITY, h_dis_ ); 
+    NodePtr_shared node_new_ptr = make_shared<Node_shared>(center, radius_, INFINITY, h_dis_); 
     
     return node_new_ptr;
 }
@@ -543,7 +532,7 @@ bool safeRegionRrtStar::checkTrajPtCol(Vector3d & pt)
     else return false;
 }
 
-inline bool safeRegionRrtStar::checkEnd( NodePtr ptr )
+inline bool safeRegionRrtStar::checkEnd( NodePtr_shared ptr )
 {    
     double distance = getDis(ptr, end_pt);
     
@@ -553,18 +542,23 @@ inline bool safeRegionRrtStar::checkEnd( NodePtr ptr )
     return false;
 }
 
-inline NodePtr safeRegionRrtStar::findNearstVertex( Vector3d & pt )
+inline NodePtr_shared safeRegionRrtStar::findnearestVertex( Vector3d & pt )
 {
     float pos[3] = {(float)pt(0), (float)pt(1), (float)pt(2)};
     kdres * nearest = kd_nearestf( kdTree_, pos );
-
-    NodePtr node_nearst_ptr = (NodePtr) kd_res_item_data( nearest );
+    Node_shared* raw_ptr = static_cast<Node_shared*>(kd_res_item_data(nearest));
+    NodePtr_shared node_nearest_ptr;
+    auto it = node_raw_to_shared_map.find(raw_ptr);
+    if (it != node_raw_to_shared_map.end())
+    {
+        node_nearest_ptr = it->second;
+    }
     kd_res_free(nearest);
     
-    return node_nearst_ptr;
+    return node_nearest_ptr;
 }
 
-inline int safeRegionRrtStar::checkNodeRelation( double dis, NodePtr node_1, NodePtr node_2 )
+inline int safeRegionRrtStar::checkNodeRelation( double dis, NodePtr_shared node_1, NodePtr_shared node_2 )
 {
 // -1 indicate two nodes are connected good
 //  0 indicate two nodes are not connected
@@ -582,21 +576,26 @@ inline int safeRegionRrtStar::checkNodeRelation( double dis, NodePtr node_1, Nod
 }
 
 #if 1
-void safeRegionRrtStar::treeRewire( NodePtr node_new_ptr, NodePtr node_nearst_ptr)
+void safeRegionRrtStar::treeRewire( NodePtr_shared node_new_ptr, NodePtr_shared node_nearest_ptr)
 {     
-      NodePtr newPtr     = node_new_ptr;      
-      NodePtr nearestPtr = node_nearst_ptr;
+      NodePtr_shared newPtr     = node_new_ptr;      
+      NodePtr_shared nearestPtr = node_nearest_ptr;
 
       float range = newPtr->radius * 2.0f;
       float pos[3] = {(float)newPtr->coord(0), (float)newPtr->coord(1), (float)newPtr->coord(2)};
       struct kdres *presults  = kd_nearest_rangef( kdTree_, pos, range);
-
-      vector<NodePtr> nearPtrList;
+      vector<NodePtr_shared> nearPtrList;
       bool isInvalid = false;
       while( !kd_res_end( presults ) ) { // Pull all the nodes outside the result data structure from the kd-tree
                                          // And go through all the nearby vertex, check the relations, to see whether the newPtr should be discarded
-            NodePtr nearPtr = (NodePtr)kd_res_item_data( presults );
-
+            Node_shared* raw_ptr = static_cast<Node_shared*>(kd_res_item_data( presults ));
+            NodePtr_shared nearPtr;
+            auto it = node_raw_to_shared_map.find(raw_ptr);
+            if (it != node_raw_to_shared_map.end())
+            {
+                nearPtr = it->second;
+            }
+            
             double dis = getDis( nearPtr, newPtr );
             int   res = checkNodeRelation( dis, nearPtr, newPtr );
             nearPtr->rel_id  = res;    // temporary variables to record the local realtions with nearby nodes, to avoid repeated calculation in this two terms
@@ -629,13 +628,13 @@ void safeRegionRrtStar::treeRewire( NodePtr node_new_ptr, NodePtr node_nearst_pt
       newPtr->preNode_ptr = nearestPtr;
       newPtr->g = min_cost;
       nearestPtr->nxtNode_ptr.push_back(newPtr);
-      NodePtr lstParentPtr = nearestPtr; // a pointer records the last best father of the new node
+      NodePtr_shared lstParentPtr = nearestPtr; // a pointer records the last best father of the new node
 
-      vector<NodePtr> nearVertex;
+      vector<NodePtr_shared> nearVertex;
 
       /*  Go through all the nearby vertex again, to deal with another two case. Note, better not mix this go through with the previous one  */
       for(auto nodeptr:nearPtrList){
-        NodePtr nearPtr = nodeptr;
+        NodePtr_shared nearPtr = nodeptr;
         
         // Choose the parent
         int res   = nearPtr->rel_id;
@@ -659,9 +658,9 @@ void safeRegionRrtStar::treeRewire( NodePtr node_new_ptr, NodePtr node_nearst_pt
 
       /*  Rewire the neighbors  */
       for(int i = 0; i < int(nearVertex.size()); i++ ){
-          NodePtr nodeptr = nearVertex[i];
+          NodePtr_shared nodeptr = nearVertex[i];
           
-          NodePtr nearPtr = nodeptr;
+          NodePtr_shared nearPtr = nodeptr;
           if(nearPtr->valid == false) continue;
 
           double dis = getDis( nearPtr, newPtr );
@@ -677,12 +676,12 @@ void safeRegionRrtStar::treeRewire( NodePtr node_new_ptr, NodePtr node_nearst_pt
                   nearPtr->g = cost;
               }
               else{
-                  NodePtr lstNearParent = nearPtr->preNode_ptr;
+                  NodePtr_shared lstNearParent = nearPtr->preNode_ptr;
                   nearPtr->preNode_ptr = newPtr;
                   nearPtr->g = cost;
                   
                   nearPtr->change = true; // use a temporary flag to indicate this pointer should be deleted
-                  vector<NodePtr> child = lstNearParent->nxtNode_ptr;
+                  vector<NodePtr_shared> child = lstNearParent->nxtNode_ptr;
                       
                   lstNearParent->nxtNode_ptr.clear();
                   for(auto ptr: child){
@@ -698,19 +697,20 @@ void safeRegionRrtStar::treeRewire( NodePtr node_new_ptr, NodePtr node_nearst_pt
 }
 #endif
 
-void safeRegionRrtStar::recordNode(NodePtr new_node)
+void safeRegionRrtStar::recordNode(NodePtr_shared new_node)
 {
     NodeList.push_back(new_node);
+    node_raw_to_shared_map[new_node.get()] = new_node;
 }
 
 void safeRegionRrtStar::tracePath()
 {   
-    vector<NodePtr> feasibleEndList;      
+    vector<NodePtr_shared> feasibleEndList;      
     for(auto endPtr: EndList)
     {
         if( (checkValidEnd(endPtr) == false) || (checkEnd(endPtr) == false) || (endPtr->valid == false) )
         {
-            std::cout<<"endPtr pos"<<endPtr->coord<<" radius: "<<endPtr->radius<<std::endl;
+            // std::cout<<"endPtr pos"<<endPtr->coord<<" radius: "<<endPtr->radius<<std::endl;
 
             continue;
         }
@@ -745,7 +745,7 @@ void safeRegionRrtStar::tracePath()
         }
     }
 
-    NodePtr ptr = best_end_ptr;
+    NodePtr_shared ptr = best_end_ptr;
 
     /*  stack the path (corridor) data for trajectory generation  */
     int idx = 0;
@@ -782,15 +782,9 @@ void safeRegionRrtStar::treeDestruct()
     {
         kd_free(kdTree_);
     }
-    
-    for( int i = 0; i < int(NodeList.size()); i++)
-    {   
-        NodePtr ptr = NodeList[i];
-        if(ptr != NULL)
-        {
-            delete ptr;
-        }
-    }
+    NodeList.clear();
+    node_raw_to_shared_map.clear();
+
 }
 
 inline double safeRegionRrtStar::checkRadius(Vector3d & pt)
@@ -809,9 +803,9 @@ inline int safeRegionRrtStar::checkNodeUpdate(double new_radius, double old_radi
 }
 
 
-inline bool safeRegionRrtStar::isSuccessor(NodePtr curPtr, NodePtr nearPtr) // check if curPtr is father of nearPtr
+inline bool safeRegionRrtStar::isSuccessor(NodePtr_shared curPtr, NodePtr_shared nearPtr) // check if curPtr is father of nearPtr
 {     
-    NodePtr prePtr = nearPtr->preNode_ptr;
+    NodePtr_shared prePtr = nearPtr->preNode_ptr;
     
     while(prePtr != NULL)
     {
@@ -823,9 +817,9 @@ inline bool safeRegionRrtStar::isSuccessor(NodePtr curPtr, NodePtr nearPtr) // c
     return false;
 }
 
-inline bool safeRegionRrtStar::checkValidEnd(NodePtr endPtr)
+inline bool safeRegionRrtStar::checkValidEnd(NodePtr_shared endPtr)
 {
-    NodePtr ptr = endPtr;
+    NodePtr_shared ptr = endPtr;
 
     while( ptr != NULL )
     {   
@@ -847,12 +841,12 @@ void safeRegionRrtStar::SafeRegionExpansion( double time_limit )
     auto time_bef_expand = std::chrono::steady_clock::now();
     kdTree_ = kd_create(3);
     commit_root  = start_pt;
-    root_node = new Node(start_pt, radiusSearch( start_pt ), 0.0, min_distance); 
+    root_node = make_shared<Node_shared>(start_pt, radiusSearch(start_pt), 0.0, min_distance); 
 
     recordNode(root_node);
 
     float pos[3] = {(float)root_node->coord(0), (float)root_node->coord(1), (float)root_node->coord(2)};
-    kd_insertf(kdTree_, pos, root_node);
+    kd_insertf(kdTree_, pos, root_node.get());
     int iter_count;
 
     for( iter_count = 0; iter_count < max_samples; iter_count ++)
@@ -864,15 +858,15 @@ void safeRegionRrtStar::SafeRegionExpansion( double time_limit )
         Vector3d   pt_sample = genSample();
         sampleList.push_back(pt_sample);
         
-        NodePtr node_nearst_ptr = findNearstVertex(pt_sample);
+        NodePtr_shared node_nearest_ptr = findnearestVertex(pt_sample);
         
-        if(!node_nearst_ptr->valid || node_nearst_ptr == NULL )
+        if(!node_nearest_ptr->valid || node_nearest_ptr == NULL )
         {
             // std::cout<<"if1"<<std::endl;
             continue;
         }
 
-        NodePtr node_new_ptr = genNewNode(pt_sample, node_nearst_ptr); 
+        NodePtr_shared node_new_ptr = genNewNode(pt_sample, node_nearest_ptr); 
         
         if( node_new_ptr->coord(2) < z_l  || node_new_ptr->radius < safety_margin )
         {
@@ -882,7 +876,7 @@ void safeRegionRrtStar::SafeRegionExpansion( double time_limit )
             continue;
         }
         
-        treeRewire(node_new_ptr, node_nearst_ptr);  
+        treeRewire(node_new_ptr, node_nearest_ptr);  
         
         if( ! node_new_ptr->valid)
         {
@@ -902,7 +896,7 @@ void safeRegionRrtStar::SafeRegionExpansion( double time_limit )
         pos[0] = (float)node_new_ptr->coord(0);
         pos[1] = (float)node_new_ptr->coord(1);
         pos[2] = (float)node_new_ptr->coord(2);
-        kd_insertf(kdTree_, pos, node_new_ptr);
+        kd_insertf(kdTree_, pos, node_new_ptr.get());
 
         recordNode(node_new_ptr);
         // std::cout<<"inserted node coord: "<<node_new_ptr->coord[0]<<" : "<<node_new_ptr->coord[1]<<" : "<<node_new_ptr->coord[2]<<std::endl;
@@ -913,6 +907,7 @@ void safeRegionRrtStar::SafeRegionExpansion( double time_limit )
     }
 
     removeInvalid();
+    std::cout<<"out of remove invalid in expansion: "<<std::endl;
     tracePath();
 
 }
@@ -921,8 +916,9 @@ void safeRegionRrtStar::SafeRegionRefine( double time_limit )
 {   
     /*  Every time the refine function is called, new samples are continuously generated and the tree is continuously rewired, hope to get a better solution  */
     /*  The refine process is mainly same as the initialization of the tree  */
+    std::cout<<"in refine loop"<<std::endl;
+
     auto time_bef_refine = std::chrono::steady_clock::now();
-    // std::cout<<"in refine loop"<<std::endl;
     float pos[3];
     while( true )
     {     
@@ -935,15 +931,15 @@ void safeRegionRrtStar::SafeRegionRefine( double time_limit )
         } 
         
         Vector3d pt_sample =  genSample();
-        NodePtr node_nearst_ptr = findNearstVertex(pt_sample);
+        NodePtr_shared node_nearest_ptr = findnearestVertex(pt_sample);
         
-        if(!node_nearst_ptr->valid || node_nearst_ptr == NULL ) continue;
+        if(!node_nearest_ptr->valid || node_nearest_ptr == NULL ) continue;
                   
-        NodePtr node_new_ptr  =  genNewNode(pt_sample, node_nearst_ptr); 
+        NodePtr_shared node_new_ptr  =  genNewNode(pt_sample, node_nearest_ptr); 
         
         if( node_new_ptr->coord(2) < z_l  || node_new_ptr->radius < safety_margin ) continue;
            
-        treeRewire(node_new_ptr, node_nearst_ptr);  
+        treeRewire(node_new_ptr, node_nearest_ptr);  
         
         if( node_new_ptr->valid == false ) continue;
 
@@ -959,14 +955,16 @@ void safeRegionRrtStar::SafeRegionRefine( double time_limit )
         pos[0] = (float)node_new_ptr->coord(0);
         pos[1] = (float)node_new_ptr->coord(1);
         pos[2] = (float)node_new_ptr->coord(2);
-        kd_insertf(kdTree_, pos, node_new_ptr);
+        kd_insertf(kdTree_, pos, node_new_ptr.get());
 
         recordNode(node_new_ptr);
         treePrune(node_new_ptr);      
         if( int(invalidSet.size()) >= cach_size) removeInvalid();
   }
 
-    removeInvalid();    
+    removeInvalid();  
+    std::cout<<"out of remove invalid in expansion: "<<std::endl;
+  
     tracePath();
 
 }
@@ -974,6 +972,7 @@ void safeRegionRrtStar::SafeRegionRefine( double time_limit )
 void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
 {   
     /*  The re-evaluate of the RRT*, find the best feasble path (corridor) by lazy-evaluzation  */
+    std::cout<<"in evaluate loop"<<std::endl;
     if(path_exist_status == false){
         std::cout<<"[path re-evaluate] no path exists. "<<std::endl;
         return;
@@ -986,8 +985,8 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
     {   
         for(int i = 0; i < int(PathList.size()); i++ ) 
         {   
-            NodePtr ptr = PathList[i];
-            NodePtr pre_ptr =  ptr->preNode_ptr;
+            NodePtr_shared ptr = PathList[i];
+            NodePtr_shared pre_ptr =  ptr->preNode_ptr;
 
             if( pre_ptr != NULL ){
                 double update_radius = checkRadius(ptr->coord);
@@ -1017,7 +1016,7 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
                     } 
                     else
                     {
-                        vector<NodePtr> childList = ptr->nxtNode_ptr;
+                        vector<NodePtr_shared> childList = ptr->nxtNode_ptr;
                         for(auto nodeptr: childList){  
                             // inspect each child of ptr, to see whether they are still connected 
                             int res = checkNodeRelation( getDis( ptr, nodeptr ), ptr, nodeptr );
@@ -1049,7 +1048,7 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
             break;
         }
 
-        vector<NodePtr> feasibleEndList;                
+        vector<NodePtr_shared> feasibleEndList;                
         for(auto endPtr: EndList)
         {
             if( (endPtr->valid == false)  || (checkEnd(endPtr) == false) )
@@ -1082,7 +1081,7 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
             }
         
             PathList.clear();
-            NodePtr ptrr = best_end_ptr;
+            NodePtr_shared ptrr = best_end_ptr;
             while( ptrr != NULL )
             {
                 PathList.push_back( ptrr );
@@ -1095,8 +1094,15 @@ void safeRegionRrtStar::SafeRegionEvaluate( double time_limit )
     double repair_limit = time_limit - std::chrono::duration_cast<std::chrono::milliseconds>(time_aft_evaluate - time_bef_evaluate).count()*0.001;
 
     removeInvalid();
+    std::cout<<"out of remove invalid in evaluate: "<<std::endl;
+    std::cout<<"tree repair beginning: "<<std::endl;
+
     treeRepair(repair_limit, fail_node_list); /*  This function is optional, better turn on to improve path quality  */
+    std::cout<<"tree repair successful: "<<std::endl;
+
     tracePath();
+    std::cout<<"trace path: "<<std::endl;
+
 }
 
 void safeRegionRrtStar::treeRepair(double time_limit, vector< pair<Vector3d, double> > & node_list)
@@ -1123,64 +1129,72 @@ void safeRegionRrtStar::treeRepair(double time_limit, vector< pair<Vector3d, dou
 
         while( !kd_res_end( presults ) ) 
         { 
-            NodePtr ptr = (NodePtr)kd_res_item_data( presults );
+            Node_shared* raw_ptr = static_cast<Node_shared*>(kd_res_item_data( presults ));
             
-            if(ptr->valid == false){   
-                kd_res_next( presults );
-                continue;
+            // Find the shared pointer for this node
+            NodePtr_shared ptr;
+            auto it = node_raw_to_shared_map.find(raw_ptr);
+            if (it != node_raw_to_shared_map.end()) {
+                ptr = it->second;
             }
             
-            NodePtr pre_ptr = ptr->preNode_ptr;
+            // Skip if ptr is null, invalid, or root node
+            if (!ptr || !ptr->valid || ptr == root_node) {
+                kd_res_next(presults);
+                continue;
+            }
+
+            NodePtr_shared pre_ptr = ptr->preNode_ptr;
             
-            if(pre_ptr == root_node || ptr == root_node){
-                kd_res_next( presults );
+            // Skip if pre_ptr is null or root node
+            if (!pre_ptr || pre_ptr == root_node) {
+                kd_res_next(presults);
                 continue;
             }
             
             double update_radius = checkRadius(ptr->coord);
-            int ret = checkNodeUpdate(update_radius, ptr->radius); // -1: not qualified, 0: shrink, 1: no difference, continue
-            ptr->radius = update_radius; // the radius of a node may shrink or remain no change, but can not enlarge
+            int ret = checkNodeUpdate(update_radius, ptr->radius);
+            ptr->radius = update_radius;
 
-            if( ret == -1){ // Delete this node
-                if(ptr->valid == true){
-                    ptr->valid = false;         
-                    invalidSet.push_back(ptr);
-                    clearBranchS(ptr);
-                }
+            if(ret == -1) { // Delete this node
+                ptr->valid = false;
+                invalidSet.push_back(ptr);
+                clearBranchS(ptr);
+                kd_res_next(presults);
+                continue;
             }
-            else {   
-                double dis = getDis( pre_ptr, ptr );
-                int   res = checkNodeRelation( dis, pre_ptr, ptr );
-                if( res != -1 ) { // ptr and pre_ptr are not connected anymore   
-                    if(pre_ptr->valid == true){
-                          pre_ptr->valid = false;      
-                          invalidSet.push_back(pre_ptr);
-                          clearBranchS(pre_ptr);
-                          kd_res_next( presults );
-                          continue;
-                    }
-                }
-
-                vector<NodePtr> childList = ptr->nxtNode_ptr;
-                for(auto childptr: childList){  // inspect each child of ptr, to see whether they are still connected 
-                    double dis = getDis( ptr, childptr );
-                    int res = checkNodeRelation( dis, ptr, childptr );
-                    if( res != -1 ) { // the child is disconnected with its parent   
-                        if(childptr->valid == true){
-                            childptr->valid = false;      
-                            invalidSet.push_back(childptr);
-                            clearBranchS(childptr);
-                        }
-                    } 
-                }
+            
+            double dis = getDis(pre_ptr, ptr);
+            int res = checkNodeRelation(dis, pre_ptr, ptr);
+            
+            if(res != -1) { // ptr and pre_ptr are not connected anymore
+                pre_ptr->valid = false;
+                invalidSet.push_back(pre_ptr);
+                clearBranchS(pre_ptr);
+                kd_res_next(presults);
+                continue;
             }
 
-            kd_res_next( presults );
+            vector<NodePtr_shared> childList = ptr->nxtNode_ptr;
+            for(auto childptr: childList) {
+                // Add validation for childptr
+                if (!childptr || !childptr->valid) continue;
+                
+                double dis = getDis(ptr, childptr);
+                int res = checkNodeRelation(dis, ptr, childptr);
+                if(res != -1) { // the child is disconnected with its parent
+                    childptr->valid = false;
+                    invalidSet.push_back(childptr);
+                    clearBranchS(childptr);
+                }
+            }
+
+            kd_res_next(presults);
         }
 
-        kd_res_free( presults );
+        kd_res_free(presults);
     }
     
     removeInvalid();
-
+    std::cout<<"out of remove invalid in repair: "<<std::endl;
 }

@@ -105,10 +105,8 @@ class safeRegionRrtStarDynamic
 		/* set-up functions */
 		void reset();
 		void setParam( double safety_margin_, double search_margin_, double deltat, double sample_range_, double h_fov_, double v_fov , bool uncertanity);
-		void setInput(pcl::PointCloud<pcl::PointXYZ> CloudIn, Eigen::Vector3d origin);
-		void setInputDynamic(
-		const pcl::PointCloud<pcl::PointXYZ> &cloud_in,
-		const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> &dynamic_points,
+		void setInputStatic(pcl::PointCloud<pcl::PointXYZ> CloudIn);
+		void setInputDynamic(const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> &dynamic_points,
 		const Eigen::Vector3d &origin,
 		double start_time);
 		void buildTemporalGrid(const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& dynamic_points);

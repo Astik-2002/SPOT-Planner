@@ -822,7 +822,11 @@ namespace gcopter
                     hPolyIdx(j) = i;
                 }
             }
-
+            if(spatialDim == 0)
+            {
+                std::cout<<"FUBAR check1"<<std::endl;
+                std::cout<<"temporalDim check: "<<temporalDim<<std::endl;
+            }
             // Setup for MINCO_S3NU, FlatnessMap, and L-BFGS solver
             minco.setConditions(headPVA, tailPVA, pieceN);
             flatmap.reset(physicalPm(0), physicalPm(1), physicalPm(2),
@@ -835,7 +839,11 @@ namespace gcopter
             gradByTimes.resize(pieceN);
             partialGradByCoeffs.resize(6 * pieceN, 3);
             partialGradByTimes.resize(pieceN);
-
+            std::cout << "polyN: " << polyN << std::endl;
+            std::cout << "pieceIdx: " << pieceIdx.transpose() << std::endl;
+            std::cout << "pieceN: " << pieceN << std::endl;
+            std::cout << "spatialDim: " << spatialDim << std::endl;
+            std::cout << "times size: " << times.size() << std::endl;
             return true;
         }
 

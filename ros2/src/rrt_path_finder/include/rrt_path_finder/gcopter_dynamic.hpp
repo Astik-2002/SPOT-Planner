@@ -27,7 +27,7 @@
 
 #include "minco.hpp"
 #include "flatness.hpp"
-#include "lbfgs.hpp"
+#include "lbfgs_bkup.hpp"
 
 #include <Eigen/Eigen>
 
@@ -79,7 +79,7 @@ namespace gcopter_dynamic
         double zero_cost;
         double allocSpeed;
 
-        lbfgs::lbfgs_parameter_t lbfgs_params;
+        lbfgs_bkup::lbfgs_parameter_t lbfgs_params;
         std::vector<Eigen::Matrix3d> dynamic_obs_array;
         double _startT;
         double r_safe;
@@ -207,7 +207,7 @@ namespace gcopter_dynamic
             const int sizeP = P.cols();
 
             double minSqrD;
-            lbfgs::lbfgs_parameter_t tiny_nls_params;
+            lbfgs_bkup::lbfgs_parameter_t tiny_nls_params;
             tiny_nls_params.past = 0;
             tiny_nls_params.delta = 1.0e-5;
             tiny_nls_params.g_epsilon = FLT_EPSILON;
@@ -224,7 +224,7 @@ namespace gcopter_dynamic
                 ovPoly.rightCols(k) = vPolys[l];
                 Eigen::VectorXd x(k);
                 x.setConstant(sqrt(1.0 / k));
-                lbfgs::lbfgs_optimize(x,
+                lbfgs_bkup::lbfgs_optimize(x,
                                       minSqrD,
                                       &GCOPTER_PolytopeSFC_Dynamic::costTinyNLS,
                                       nullptr,
@@ -475,53 +475,86 @@ namespace gcopter_dynamic
 
                     if(is_bkup)
                     {
-                        // std::cout<<"[attach penalty function] debug 5 dynamic_cost: "<<std::endl;
+                        double t_global = start_time + s1;   // current absolute time of this trajectory sample
 
-                        for (const auto &obs : obs_array) 
+                        for (const auto &obs : obs_array)
                         {
-                            const Eigen::Vector3d obs_pos = obs.row(0);
-                            const Eigen::Vector3d obs_vel = obs.row(1);
-                            double height = obs(2, 0);
-                            double length = obs(2, 1);
-                            double width = obs(2, 2);
-                            const double t_global = start_time + s1;
-                            const Eigen::Vector3d obs_pos_t = obs_pos + t_global * obs_vel;
+                            Eigen::Vector3d obs_pos0 = obs.row(0);   // initial obstacle position
+                            Eigen::Vector3d obs_vel  = obs.row(1);   // obstacle velocity
+                            Eigen::Vector3d obs_size = obs.row(2).reverse();   // bounding box dimensions (H, W, L)
 
-                            // const double sqrDist = (pos - obs_pos_t).squaredNorm();
-                            Eigen::Vector3d closest_pt = closestBBoxPoint(obs_pos_t, height, length, width, pos);
-                            Eigen::Vector3d delta = pos - closest_pt;
-                            double sqrDist = (closest_pt - pos).norm();
-                            if (sqrDist < 1e-6) 
+                            // Predict obstacle center at current time
+                            Eigen::Vector3d ct_center = obs_pos0 + t_global * obs_vel;
+
+                            // Half-length of obstacle box
+                            Eigen::Vector3d half_len = 0.5 * obs_size;
+
+                            // Distance between UAV and obstacle center
+                            Eigen::Vector3d dist_vec = pos - ct_center;
+
+                            // Check vector: how far outside the bounding box the UAV is
+                            Eigen::Vector3d check_vec = dist_vec.cwiseAbs() - half_len;
+
+                            if ((check_vec.array() < 0.0).all())
                             {
-                                // Push outward along some direction (e.g., away from box center)
-                                delta = (pos - obs_pos_t).normalized();
-                                sqrDist = 1e-6;
-                            }
-                            const double violaDist = (r_safe + 0.1)*(r_safe + 0.1) - sqrDist;
-                            double dynamicCost = 0.0;
-                            double dynamicGrad = 0.0;
+                                // ================== Case A: Inside bounding box (hard penalty) ==================
+                                // Nearest point on obstacle surface
+                                Eigen::Vector3d axis(
+                                    dist_vec(0) > 0 ? ct_center(0) + half_len(0) : ct_center(0) - half_len(0),
+                                    dist_vec(1) > 0 ? ct_center(1) + half_len(1) : ct_center(1) - half_len(1),
+                                    dist_vec(2) > 0 ? ct_center(2) + half_len(2) : ct_center(2) - half_len(2));
 
-                            if (smoothedL1(violaDist, smoothFactor, dynamicCost, dynamicGrad))
+                                Eigen::Vector3d dist = pos - axis;
+
+                                // Quadratic penalty on penetration
+                                double dist_err2 = dist.squaredNorm();
+                                double pena_dyn = weightDynObs * dist_err2;
+
+                                // Gradient wrt UAV position
+                                Eigen::Vector3d gradPos_dyn = weightDynObs * 2.0 * dist;
+
+                                // Inject into trajectory cost
+                                pena += pena_dyn;
+                                gradPos += gradPos_dyn;
+                            }
+                            else
                             {
-                                pena += weightDynObs * dynamicCost;
-                                Eigen::Vector3d grad = -dynamicGrad * weightDynObs * 2.0 * delta;
-                                gradPos += grad;
-                            }
-                            // const double violaDist = (r_safe + 0.1)*(r_safe + 0.1) - sqrDist;
-                            // if (violaDist > 0.0) 
-                            // {
-                            //     double penalty = violaDist * violaDist;
-                            //     pena += weightDynObs * penalty;
+                                // ================== Case B: Near obstacle (ellipsoidal soft penalty) ==================
+                                // Ellipsoid axes = half box lengths
+                                double inv_x = 1.0 / (half_len(0) * half_len(0));
+                                double inv_y = 1.0 / (half_len(1) * half_len(1));
+                                double inv_z = 1.0 / (half_len(2) * half_len(2));
 
-                            //     // Gradient of penalty w.r.t pos
-                            //     Eigen::Vector3d grad = -4.0 * weightDynObs * violaDist * delta;
-                            //     gradPos += grad;
-                            // }
+                                // Ellipsoidal distance measure
+                                double ellip_dist2 =
+                                    dist_vec(0) * dist_vec(0) * inv_x +
+                                    dist_vec(1) * dist_vec(1) * inv_y +
+                                    dist_vec(2) * dist_vec(2) * inv_z;
+
+                                // If UAV is within "ellipsoidal safe margin"
+                                if (ellip_dist2 < 2.5)   // threshold radius (tunable)
+                                {
+                                    double dist_err = 2.5 - ellip_dist2;
+                                    double dist_err2 = dist_err * dist_err;
+                                    double dist_err3 = dist_err2 * dist_err;
+
+                                    double pena_dyn = weightDynObs * dist_err3;
+
+                                    // Gradient wrt UAV position
+                                    Eigen::Vector3d gradPos_dyn =
+                                        weightDynObs * 3.0 * dist_err2 * (-2.0) *
+                                        Eigen::Vector3d(inv_x * dist_vec(0),
+                                                        inv_y * dist_vec(1),
+                                                        inv_z * dist_vec(2));
+
+                                    // Inject into trajectory cost
+                                    pena += pena_dyn;
+                                    gradPos += gradPos_dyn;
+                                }
+                            }
                         }
-
-                        // std::cout<<"[attach penalty function] debug 6: "<<std::endl;
-
                     }
+
                     
                     for (int k = 0; k < K; k++)
                     {
@@ -742,12 +775,12 @@ namespace gcopter_dynamic
             dataPtrs[1] = (void *)(&ini);
             dataPtrs[2] = (void *)(&fin);
             dataPtrs[3] = (void *)(&vPolys);
-            lbfgs::lbfgs_parameter_t shortest_path_params;
+            lbfgs_bkup::lbfgs_parameter_t shortest_path_params;
             shortest_path_params.past = 3;
             shortest_path_params.delta = 1.0e-3;
             shortest_path_params.g_epsilon = 1.0e-5;
 
-            lbfgs::lbfgs_optimize(xi,
+            lbfgs_bkup::lbfgs_optimize(xi,
                                   minDistance,
                                   &GCOPTER_PolytopeSFC_Dynamic::costDistance,
                                   nullptr,
@@ -968,7 +1001,7 @@ namespace gcopter_dynamic
             lbfgs_params.g_epsilon = 0.0;
             lbfgs_params.delta = relCostTol;
             //std::cout << "check 2"<<std::endl;
-            int ret = lbfgs::lbfgs_optimize(x,
+            int ret = lbfgs_bkup::lbfgs_optimize(x,
                                             minCostFunctional,
                                             &GCOPTER_PolytopeSFC_Dynamic::costFunctional,
                                             nullptr,
@@ -987,7 +1020,7 @@ namespace gcopter_dynamic
                 traj.clear();
                 minCostFunctional = INFINITY;
                 std::cout << "Optimization Failed: "
-                          << lbfgs::lbfgs_strerror(ret)
+                          << lbfgs_bkup::lbfgs_strerror(ret)
                           << std::endl;
             }
             //std::cout << "check 3"<<std::endl;

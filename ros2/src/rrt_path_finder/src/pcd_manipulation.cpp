@@ -2,6 +2,8 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <custom_interface_gym/msg/bounding_box_array.hpp>
 #include <custom_interface_gym/msg/dynamic_bbox.hpp>
+#include <custom_interface_gym/msg/dynamic_point.hpp>
+#include <custom_interface_gym/msg/dynamic_point_cloud.hpp>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -29,6 +31,9 @@ public:
 
         pointcloud_sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "pcd_gym_pybullet", rclcpp::SensorDataQoS(), std::bind(&DynamicObstacleFilterNode::rcvPointCloudCallBack, this, _1));
+        
+        static_pcl_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/static_cloud", 10);
+        dynamic_structured_pub_ = this->create_publisher<custom_interface_gym::msg::DynamicPointCloud>("/dynamic_cloud_structured", 10);
 
         // Create N+1 publishers (t0 to tN)
         for (int i = 0; i <= n_preds_; ++i)
@@ -46,6 +51,10 @@ private:
     rclcpp::Subscription<custom_interface_gym::msg::BoundingBoxArray>::SharedPtr bbox_sub_;
 
     std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr> dynamic_pcl_pubs_;
+
+    // Add publishers
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr static_pcl_pub_;
+    rclcpp::Publisher<custom_interface_gym::msg::DynamicPointCloud>::SharedPtr dynamic_structured_pub_;
 
     std::vector<Eigen::Matrix3d> dynamic_obs_array_;
     std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>> dynamic_points_;
@@ -121,16 +130,46 @@ private:
             });
 
         points.erase(new_end, points.end());
+        points.shrink_to_fit();
 
-        // Publish current dynamic cloud
-        publishFutureDynamicCloud(dynamic_cloud, 0);
+        cloud_input_.width = cloud_input_.points.size();
+        cloud_input_.height = 1;  // unorganized point cloud
+        cloud_input_.is_dense = false;
 
-        // Publish N future predictions
-        for (int i = 1; i <= n_preds_; ++i)
+        sensor_msgs::msg::PointCloud2 static_msg;
+        pcl::toROSMsg(cloud_input_, static_msg); // cloud_input_ now has only static points
+        static_msg.header.frame_id = "ground_link";
+        static_msg.header.stamp = this->get_clock()->now();
+        static_pcl_pub_->publish(static_msg);
+
+        // Publish dynamic structured cloud
+        custom_interface_gym::msg::DynamicPointCloud dyn_msg;
+        dyn_msg.header.frame_id = "ground_link";
+        dyn_msg.header.stamp = this->get_clock()->now();
+
+        for (const auto& [pos, vel] : dynamic_points_)
         {
-            auto future_points = getPredictedPoints(i);
-            publishColoredCloud(future_points, i);
+            custom_interface_gym::msg::DynamicPoint dp;
+            dp.position.x = pos.x();
+            dp.position.y = pos.y();
+            dp.position.z = pos.z();
+
+            dp.velocity.x = vel.x();
+            dp.velocity.y = vel.y();
+            dp.velocity.z = vel.z();
+
+            dyn_msg.points.push_back(dp);
         }
+        dynamic_structured_pub_->publish(dyn_msg);
+        // Publish current dynamic cloud
+        // publishFutureDynamicCloud(dynamic_cloud, 0);
+
+        // // Publish N future predictions
+        // for (int i = 1; i <= n_preds_; ++i)
+        // {
+        //     auto future_points = getPredictedPoints(i);
+        //     publishColoredCloud(future_points, i);
+        // }
     }
 
     std::vector<Eigen::Vector3d> getPredictedPoints(int step)

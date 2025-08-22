@@ -698,43 +698,7 @@ class BaseAviary(gym.Env):
     
     ################################################################################
 
-    # def _simulateLivoxMid360Lidar(self, nth_drone, vertical_fov_deg=90, horizontal_fov_deg=360, max_distance=10, vertical_res=20):
-    #     # Pose and orientation
-    #     pos = self.pos[nth_drone, :]
-    #     quat = self.quat[nth_drone, :]
-    #     rot_mat = np.array(p.getMatrixFromQuaternion(quat)).reshape(3, 3)
-    #     lidar_offset = np.array([0.0, 0.0, 0.2])
-    #     lidar_pos = pos + rot_mat @ lidar_offset
-
-    #     # Angle grids
-    #     horizontal_res = int(horizontal_fov_deg)
-    #     vertical_angles = np.linspace(-vertical_fov_deg/2, vertical_fov_deg/2, vertical_res) * np.pi / 180
-    #     horizontal_angles = np.linspace(-horizontal_fov_deg/2, horizontal_fov_deg/2, horizontal_res, endpoint=False) * np.pi / 180
-    #     V, H = np.meshgrid(vertical_angles, horizontal_angles, indexing='ij')
-
-    #     # Vectorized direction computation
-    #     x = np.cos(V) * np.cos(H)
-    #     y = np.cos(V) * np.sin(H)
-    #     z = np.sin(V)
-    #     directions = np.stack([x, y, z], axis=-1).reshape(-1, 3)
-
-    #     # ray_from at origin in lidar frame, ray_to is direction * max_distance
-    #     ray_from = np.zeros_like(directions)
-    #     ray_to = directions * max_distance
-
-    #     # Transform to world frame (rotation + translation)
-    #     ray_from_world = (ray_from @ rot_mat.T) + lidar_pos
-    #     ray_to_world = (ray_to @ rot_mat.T) + lidar_pos
-
-    #     # Ray cast in batch
-    #     results = p.rayTestBatch(ray_from_world, ray_to_world)
-
-    #     # Vectorized hit point extraction
-    #     hit_points = np.array([res[3] if res[2] < 1.0 else [0.0, 0.0, 0.0] for res in results])
-    #     valid_points = hit_points[~np.all(hit_points == 0.0, axis=1)]
-
-    #     return valid_points
-    def _simulateLivoxMid360Lidar(self, nth_drone, vertical_fov_up = 30.0, vertical_fov_down = -30.0, horizontal_fov_deg=360, max_distance=5.0, vertical_res=20):
+    def _simulateLivoxMid360Lidar(self, nth_drone, vertical_fov_up = 30.0, vertical_fov_down = -30.0, horizontal_fov_deg=360, max_distance=6.0, vertical_res=20):
         # Cache direction vectors if resolution/FOV don't change
         if not hasattr(self, '_lidar_directions_cache'):
             vertical_angles = np.linspace(vertical_fov_down, vertical_fov_up, vertical_res) * np.pi / 180

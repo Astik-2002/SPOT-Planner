@@ -1460,13 +1460,13 @@ private:
     }
 
 
-    void visRrt(const std::vector<NodePtr>& nodes)
+    void visRrt(const std::vector<NodePtr_shared>& nodes)
     {
         visualization_msgs::msg::MarkerArray tree_markers;
         int marker_id = 0;
 
         // Get the tree from the RRT planner
-        std::vector<NodePtr> nodeList = _rrtPathPlanner.getTree();
+        std::vector<NodePtr_shared> nodeList = _rrtPathPlanner.getTree();
 
         // Loop through all the nodes in the tree
         for (const auto &node : nodeList) {

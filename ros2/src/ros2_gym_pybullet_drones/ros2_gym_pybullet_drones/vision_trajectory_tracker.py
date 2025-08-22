@@ -78,9 +78,8 @@ class AviaryWrapper(Node):
                            environment_file="environment_31.csv"
                            )
         #### Initialize an action with the RPMs at hover ###########
-        self.action = np.ones(4)*self.env.HOVER_RPM
         self.ctrl = DSLPIDControl(drone_model=DroneModel.MANTIS)
-
+        self.action = np.ones(4)*self.env.HOVER_RPM
         #### Declare publishing on 'obs' and create a timer to call 
         #### action_callback every timer_period_sec ################
         self.publisher_ = self.create_publisher(Float32MultiArray, 'obs', 1)
@@ -180,7 +179,7 @@ class AviaryWrapper(Node):
             bbox = DynamicBbox()
             pos = obs["pos"]
             d_obs = np.linalg.norm(pos - self.pos)
-            if d_obs < 6.0:
+            if d_obs < 6.5:
                 vel = obs["velocity"]
                 bbox.center_x = pos[0]
                 bbox.center_y = pos[1]
@@ -191,8 +190,8 @@ class AviaryWrapper(Node):
                 bbox.velocity_z = vel[2]
 
                 bbox.height = 5.0
-                bbox.width = 2*obs["radius"] + 0.2
-                bbox.length = 2*obs["radius"] + 0.2
+                bbox.width = 2*obs["radius"] + 0.5
+                bbox.length = 2*obs["radius"] + 0.5
 
                 bbox_arr.boxes.append(bbox)
 
@@ -205,13 +204,13 @@ class AviaryWrapper(Node):
                 marker.action = Marker.ADD
                 marker.pose.position.x = pos[0]
                 marker.pose.position.y = pos[1]
-                marker.pose.position.z = pos[2]
+                marker.pose.position.z = 2.5
                 marker.pose.orientation.x = 0.0
                 marker.pose.orientation.y = 0.0
                 marker.pose.orientation.z = 0.0
                 marker.pose.orientation.w = 1.0
-                marker.scale.x = 2*obs["radius"] + 0.2
-                marker.scale.y = 2*obs["radius"] + 0.2
+                marker.scale.x = 2*obs["radius"]
+                marker.scale.y = 2*obs["radius"]
                 marker.scale.z = 5.0
                 marker.color.a = 0.5  # Transparent
                 if d_obs < 6.0:
@@ -271,7 +270,8 @@ class AviaryWrapper(Node):
         self.quat = np.array(obs["0"]["state"].tolist()[3:7])
         self.vel = np.array(obs["0"]["state"].tolist()[10:13])
         self.ang_vel = np.array(obs["0"]["state"].tolist()[13:16])
-        
+        # print("current position: ",self.pos)
+        # print("current velocity: ",np.linalg.norm(self.vel.flatten()))
         self.x_hist.append(self.pos[0])
         self.y_hist.append(self.pos[1])
         self.z_hist.append(self.pos[2])
@@ -301,8 +301,8 @@ class AviaryWrapper(Node):
         self.publisher_.publish(msg)
         if self.counter % 10 == 0:
             if self.lidar:
-                pcd = obs["0"]["pcd"]
-                points = obs["0"]["pcd"]
+                pcd_arr = self.env.simulateLidar()
+                points = pcd_arr[0]
                 # points = points[~np.all(points == 0, axis=1)]
                 msg = PointCloud2()
                 msg.header = Header()

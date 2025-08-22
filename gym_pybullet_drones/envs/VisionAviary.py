@@ -83,6 +83,7 @@ class VisionAviary(BaseAviary):
         self.is_torus = torus
         self._360view = deg360
         self.obstacle_ids = []
+        self.init_drone_pos = initial_xyzs
         super().__init__(drone_model=drone_model,
                          num_drones=num_drones,
                          neighbourhood_radius=neighbourhood_radius,
@@ -185,35 +186,33 @@ class VisionAviary(BaseAviary):
         """
         adjacency_mat = self._getAdjacencyMatrix()
         obs = {}
-        for i in range(self.NUM_DRONES):
-            if self._360view:
-                pcd = self._simulateLivoxMid360Lidar(i)
-                
-                obs[str(i)] = {"state": self._getDroneStateVector(i), \
-                    "neighbors": adjacency_mat[i,:], \
-                    "pcd": pcd, \
-                    }
-                
-            else:
-                self.rgb[i], self.dep[i], self.seg[i] = self._getDroneImages(i)
-                #### Printing observation to PNG frames example ############
-                if self.RECORD:
-                    self._exportImage(img_type=ImageType.RGB, # ImageType.BW, ImageType.DEP, ImageType.SEG
-                                    img_input=self.rgb[i],
-                                    path=self.ONBOARD_IMG_PATH+"drone_"+str(i),
-                                    frame_num=int(self.step_counter/self.IMG_CAPTURE_FREQ)
-                                    )
-                obs[str(i)] = {"state": self._getDroneStateVector(i), \
-                            "neighbors": adjacency_mat[i,:], \
-                            "rgb": self.rgb[i], \
-                            "dep": self.dep[i], \
-                            "seg": self.seg[i] \
-                            }
+        for i in range(self.NUM_DRONES):        
+            self.rgb[i], self.dep[i], self.seg[i] = self._getDroneImages(i)
+            #### Printing observation to PNG frames example ############
+            if self.RECORD:
+                self._exportImage(img_type=ImageType.RGB, # ImageType.BW, ImageType.DEP, ImageType.SEG
+                                img_input=self.rgb[i],
+                                path=self.ONBOARD_IMG_PATH+"drone_"+str(i),
+                                frame_num=int(self.step_counter/self.IMG_CAPTURE_FREQ)
+                                )
+            obs[str(i)] = {"state": self._getDroneStateVector(i), \
+                        "neighbors": adjacency_mat[i,:], \
+                        "rgb": self.rgb[i], \
+                        "dep": self.dep[i], \
+                        "seg": self.seg[i] \
+                        }
         return obs
 
 
     ################################################################################
 
+    def simulateLidar(self):
+        pcd_array = []
+        for i in range(self.NUM_DRONES):
+            pcd = self._simulateLivoxMid360Lidar(i)
+            pcd_array.append(pcd)
+        return pcd_array
+                
     def _preprocessAction(self,
                           action
                           ):
@@ -369,7 +368,7 @@ class VisionAviary(BaseAviary):
                     print(f"File not found: {tree_urdf}")
 
 
-    def _addDynamicObstacles(self, num_obstacles=1, x_bounds=(2, 18), y_bounds=(-8, 8), velocity_range=(-0.7, 0.7)):
+    def _addDynamicObstacles(self, num_obstacles=1, x_bounds=(2, 18), y_bounds=(-8, 8), velocity_range=(-0.3, 0.3)):
         """Adds dynamic obstacles that move with velocity profiles."""
         base_path = pkg_resources.resource_filename('gym_pybullet_drones', 'assets')
 
@@ -388,10 +387,14 @@ class VisionAviary(BaseAviary):
             if(num == 3):
                 radius = 0.5
             # Generate random initial positions within bounds
-            x_pos = np.random.uniform(x_bounds[0], x_bounds[1])
-            y_pos = np.random.uniform(y_bounds[0], y_bounds[1])
-            z_pos = 0.5  # Fixed height for the obstacles
-            pos = (x_pos, y_pos, z_pos)
+            d_uav = -1
+            while d_uav < 2.0:
+                x_pos = np.random.uniform(x_bounds[0], x_bounds[1])
+                y_pos = np.random.uniform(y_bounds[0], y_bounds[1])
+                z_pos = 0.5  # Fixed height for the obstacles
+                pos = (x_pos, y_pos, z_pos)
+                pos_obs = np.array(pos)
+                d_uav = np.linalg.norm(self.init_drone_pos - pos_obs)
 
             # Generate random velocity components
             velocity = [
