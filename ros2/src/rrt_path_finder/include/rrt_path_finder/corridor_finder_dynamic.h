@@ -47,7 +47,7 @@ class safeRegionRrtStarDynamic
 		// std::unordered_map<int, std::unordered_map<std::tuple<int, int, int>, std::vector<Eigen::Vector3d>, TupleHash>> temporal_grid;
 		std::map<int, std::unordered_map<std::tuple<int,int,int>, std::vector<Eigen::Vector3d>, TupleHash>> temporal_grid;
 		// Parameters
-		double time_resolution = 0.2;  // Time bin size (seconds)
+		double time_resolution = 0.1;  // Time bin size (seconds)
 		double cell_size = 2.0;
 
 		// start point,   target point,  centroid point of the ellipsoide sampling region

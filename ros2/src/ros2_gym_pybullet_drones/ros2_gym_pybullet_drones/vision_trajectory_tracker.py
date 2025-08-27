@@ -221,7 +221,7 @@ class AviaryWrapper(Node):
                     marker.color.g = 1.0
                 marker.color.b = 0.0
                 marker_array.markers.append(marker)
-                self.marker_pub.publish(marker_array)
+                self.dynamic_obs_marker_pub.publish(marker_array)
 
         bbox_arr.header = header
         self.dyn_obs_pub.publish(bbox_arr)
@@ -383,7 +383,7 @@ class AviaryWrapper(Node):
     def get_trajectory_callback(self, msg):
         if(msg.hover):
             if not self.is_hover_pos_set:
-                self.hover_pos = self.pos + 0.01
+                self.hover_pos = np.array([[msg.position.x, msg.position.y, msg.position.z]]).flatten()
                 # print('hover position set')
                 # print('current_pos: ',self.pos, 'hover_pos: ',self.hover_pos)
                 self.is_hover_pos_set = True

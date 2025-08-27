@@ -25,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PcdArray.msg"
   "msg/DynamicPoint.msg"
   "msg/DynamicPointCloud.msg"
+  "msg/ServerState.msg"
   DEPENDENCIES geometry_msgs std_msgs geographic_msgs sensor_msgs # Specify dependencies
 )
 

@@ -6,7 +6,7 @@
 #include "custom_interface_gym/msg/traj_msg.hpp"
 #include <nav_msgs/msg/path.hpp>
 #include "geometry_msgs/msg/pose_stamped.hpp"
-
+#include "custom_interface_gym/msg/server_state.hpp"
 #include "rrt_path_finder/firi.hpp"
 #include "rrt_path_finder/gcopter.hpp"
 #include "rrt_path_finder/trajectory.hpp"
@@ -28,7 +28,8 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr yaw_target_sub;
     rclcpp::Publisher<custom_interface_gym::msg::TrajMsg>::SharedPtr command_pub;
     rclcpp::TimerBase::SharedPtr command_timer;
-    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr server_state_pub;
+    // rclcpp::Publisher<std_msgs::msg::String>::SharedPtr server_state_pub;
+    rclcpp::Publisher<custom_interface_gym::msg::ServerState>::SharedPtr server_state_pub;
     rclcpp::TimerBase::SharedPtr state_timer;
     // Store current trajectory
     std::vector<Eigen::Matrix<double, 3, 6>> current_coefficients;  // Vector of (3, D+1) matrices for each trajectory segment
@@ -61,7 +62,7 @@ private:
         double w_max = 1.0;            // Maximum yaw rate
         double alpha_filter_dyaw = 0.5; // Smoothing factor for dyaw
     } par_;
-
+    double elapsed_t = INFINITY;
     bool face_yaw_goal = false; // Flag to determine yaw behavior
 
 
@@ -85,29 +86,28 @@ TrajectoryServerYaw()
             "corridor_endpoint", 1, std::bind(&TrajectoryServerYaw::rcvYawCallback, this, std::placeholders::_1));
 
         command_pub = this->create_publisher<custom_interface_gym::msg::TrajMsg>("rrt_command",10);
-        server_state_pub = this->create_publisher<std_msgs::msg::String>("server_state", 10);
+        server_state_pub = this->create_publisher<custom_interface_gym::msg::ServerState>(
+        "server_state", rclcpp::QoS(10).reliable());
+
         // Timer for periodic command updates
         command_timer = this->create_wall_timer(
-            std::chrono::milliseconds(10), std::bind(&TrajectoryServerYaw::commandCallback, this));
+            std::chrono::milliseconds(100), std::bind(&TrajectoryServerYaw::commandCallback, this));
         state_timer = this->create_wall_timer(
-            std::chrono::milliseconds(200), std::bind(&TrajectoryServerYaw::publishServerState, this));
+            std::chrono::milliseconds(100), std::bind(&TrajectoryServerYaw::publishServerState, this));
     }
     
     void publishServerState()
     {
-        std_msgs::msg::String state_msg;
-
+        custom_interface_gym::msg::ServerState state_msg;
         if (!has_trajectory || is_aborted) {
-            state_msg.data = "IDLE"; // no trajectory
+            state_msg.state = "IDLE";
+        } else if (elapsed_t > _traj.getTotalDuration()) {
+            state_msg.state = "IDLE";
         } else {
-            double elapsed = (this->get_clock()->now() - _start_time).seconds();
-            if (elapsed > _traj.getTotalDuration()) {
-                state_msg.data = "IDLE"; // completed trajectory
-            } else {
-                state_msg.data = "ACTIVE"; // currently following
-            }
+            state_msg.state = "ACTIVE";
         }
-
+        // std::cout<<"[Trajectory server] status send: "<<state_msg.state<<std::endl;
+        state_msg.elapsed_t = std::isinf(elapsed_t) ? -1.0 : elapsed_t; // e.g. -1 if no valid elapsed time
         server_state_pub->publish(state_msg);
     }
 
@@ -250,6 +250,9 @@ TrajectoryServerYaw()
                 traj_msg.header.frame_id = "ground_link"; 
 
                 traj_msg.hover = true;
+                traj_msg.position.x = current_pos[0];
+                traj_msg.position.y = current_pos[1];
+                traj_msg.position.z = current_pos[2];
                 // Publish the message
                 command_pub->publish(traj_msg); // Replace traj_publisher_ with your actual publisher variable
 
@@ -279,6 +282,7 @@ TrajectoryServerYaw()
         }
         // Get elapsed time
         double elapsed = (this->get_clock()->now() - _start_time).seconds();
+        elapsed_t = elapsed;
         Eigen::Vector3d des_pos;
         Eigen::Vector3d des_vel;
         Eigen::Vector3d des_Acc;
@@ -286,6 +290,7 @@ TrajectoryServerYaw()
         
         if (elapsed > _traj.getTotalDuration())
         {
+            elapsed_t = INFINITY;
             // RCLCPP_WARN_THROTTLE(this->get_logger(), 1.0, "Trajectory completed. Waiting for new trajectory...");
             des_pos = _traj.getPos(_traj.getTotalDuration());
             des_vel = _traj.getVel(_traj.getTotalDuration());

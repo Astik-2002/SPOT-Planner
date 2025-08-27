@@ -54,6 +54,8 @@
 #include "custom_interface_gym/msg/pcd_array.hpp"
 #include "custom_interface_gym/msg/dynamic_point.hpp"
 #include "custom_interface_gym/msg/dynamic_point_cloud.hpp"
+#include "custom_interface_gym/msg/server_state.hpp"
+
 using namespace std;
 using namespace Eigen;
 using namespace pcl;
@@ -74,9 +76,9 @@ public:
                           dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>())
     {
         // Parameters
-        this->declare_parameter("safety_margin", 0.8);
-        this->declare_parameter("uav_radius", 0.6);
-        this->declare_parameter("search_margin", 0.5);
+        this->declare_parameter("safety_margin", 0.9);
+        this->declare_parameter("uav_radius", 0.5);
+        this->declare_parameter("search_margin", 0.3);
         this->declare_parameter("max_radius", 5.0);
         this->declare_parameter("refine_portion", 0.80);
         this->declare_parameter("sample_portion", 0.25);
@@ -142,6 +144,8 @@ public:
         _vis_mesh_pub = this->create_publisher<visualization_msgs::msg::Marker>("_vis_mesh", 10);
         _vis_edge_pub = this->create_publisher<visualization_msgs::msg::Marker>("_vis_edge", 10);
         _vis_commit_target = this->create_publisher<visualization_msgs::msg::Marker>("_vis_commit_target", 10);
+        _vis_collision_point = this->create_publisher<visualization_msgs::msg::Marker>("_vis_collision_point", 10);
+
         _vis_ellipsoid = this->create_publisher<visualization_msgs::msg::MarkerArray>("_vis_ellipsoid_marker", 10);
 
         _vis_trajectory_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("_vis_trajectory", 10);
@@ -172,7 +176,10 @@ public:
             "/dynamic_obs_state", 10, std::bind(&PointCloudPlanner::bboxCallback, this, std::placeholders::_1));
         _dynamic_structured_sub = this->create_subscription<custom_interface_gym::msg::DynamicPointCloud>(
             "/dynamic_cloud_structured", 10, std::bind(&PointCloudPlanner::rcvDynamicPointsCallback, this, std::placeholders::_1));
-        
+        _server_state_sub = this->create_subscription<custom_interface_gym::msg::ServerState>(
+            "server_state", rclcpp::QoS(10).reliable(),std::bind(&PointCloudPlanner::rcvServerStateCallback, this, std::placeholders::_1));
+
+
         // Create N+1 publishers (t0 to tN)
         for (int i = 0; i <= n_preds_; ++i)
         {
@@ -193,6 +200,7 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr _vis_rrt_path_pub;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr _vis_corridor_pub;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _vis_commit_target;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _vis_collision_point;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr _vis_ellipsoid;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr _vis_map_pub;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr _vis_mesh_pub;
@@ -214,7 +222,7 @@ private:
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr _odometry_sub;
     rclcpp::Subscription<custom_interface_gym::msg::BoundingBoxArray>:: SharedPtr _bbox_sub;
     rclcpp::Subscription<custom_interface_gym::msg::DynamicPointCloud>::SharedPtr _dynamic_structured_sub;
-
+    rclcpp::Subscription<custom_interface_gym::msg::ServerState>::SharedPtr _server_state_sub;
     // Timer
     rclcpp::TimerBase::SharedPtr _planning_timer;
 
@@ -247,7 +255,7 @@ private:
     float smoothingEps = 0.01;
     float relcostto1 = 0.00001;
     int _max_samples;
-    double _commit_distance = 4.0;
+    double _commit_distance = 6.0;
     double current_yaw = 0;
     double max_vel = 1.0;
     float threshold = 1.0;
@@ -318,6 +326,8 @@ private:
     std::vector<float>   pointRadiusSquaredDistance;
     bool force_test_backup = false;  // Set to false after testing
     bool near_dynamic = false;
+    bool _server_active = false;
+    double t_server = -1.0;
     std::random_device rd;
     std::mt19937 gen;
     double weight_t = 0.3;
@@ -326,6 +336,20 @@ private:
     {
         std::uniform_real_distribution<float> dis(lower, upper);
         return dis(gen);
+    }
+
+    void rcvServerStateCallback(const custom_interface_gym::msg::ServerState::SharedPtr msg)
+    {
+        if (msg->state == "ACTIVE")
+        {
+            _server_active = true;
+            t_server = msg->elapsed_t;
+        }
+        else if(msg->state == "IDLE")
+        {
+            _server_active = false;
+            t_server = -1.0;
+        }
     }
 
     void rcvWaypointsCallBack(const nav_msgs::msg::Path::SharedPtr wp_msg)
@@ -721,8 +745,8 @@ private:
         std::vector<Eigen::MatrixX4d> &hpolys,
         const double eps)
     {
-        Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
-        Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
+        Eigen::Vector3d lowCorner(_x_l, -20, _z_l2);
+        Eigen::Vector3d highCorner(_x_h, 20, _z_h2);
 
         hpolys.clear();
         int n = int(path.size());
@@ -806,144 +830,6 @@ private:
             hpolys.emplace_back(hp);
         }
     }
-
-    inline void shortCutWithTimeIntervals()
-    {
-        std::vector<Eigen::MatrixX4d> htemp = hpolys;
-        std::vector<double> original_time_vector = time_vector_poly;
-
-        // Build cumulative time vector
-        std::vector<double> cumulative_times = {0.0};
-        for (double dt : original_time_vector) {
-            cumulative_times.push_back(cumulative_times.back() + dt);
-        }
-
-        if (htemp.size() == 1) {
-            Eigen::MatrixX4d headPoly = htemp.front();
-            htemp.insert(htemp.begin(), headPoly);
-            cumulative_times.insert(cumulative_times.begin(), 0.0);  // Time 0 for dummy start
-        }
-
-        hpolys.clear();
-        time_vector_poly.clear();
-
-        int M = htemp.size();
-        bool overlap;
-        std::deque<int> idices;
-        idices.push_front(M - 1);
-
-        for (int i = M - 1; i >= 0; i--) {
-            for (int j = 0; j < i; j++) {
-                if (j < i - 1) {
-                    overlap = geo_utils::overlap(htemp[i], htemp[j], 0.01);
-                } else {
-                    overlap = true;
-                }
-                if (overlap) {
-                    idices.push_front(j);
-                    i = j + 1;
-                    break;
-                }
-            }
-        }
-
-        // Build new hpolys and new time intervals
-        for (size_t i = 0; i + 1 < idices.size(); ++i) {
-            int start_idx = idices[i];
-            int end_idx   = idices[i + 1];
-
-            hpolys.push_back(htemp[start_idx]);  // Or merge if needed
-            double t_start = cumulative_times[start_idx];
-            double t_end   = cumulative_times[end_idx];
-            time_vector_poly.push_back(t_end - t_start);  // New time interval
-        }
-    }
-
-    inline void shortCut(bool bkup = false)
-    {
-        if(!bkup)
-        {
-            std::vector<Eigen::MatrixX4d> htemp = hpolys;
-            if (htemp.size() == 1)
-                {
-                    Eigen::MatrixX4d headPoly = htemp.front();
-                    htemp.insert(htemp.begin(), headPoly);
-                }
-            hpolys.clear();
-
-            int M = htemp.size();
-            Eigen::MatrixX4d hPoly;
-            bool overlap;
-            std::deque<int> idices;
-            idices.push_front(M - 1);
-            for (int i = M - 1; i >= 0; i--)
-            {
-                for (int j = 0; j < i; j++)
-                {
-                    if (j < i - 1)
-                    {
-                        overlap = geo_utils::overlap(htemp[i], htemp[j], 0.01);
-                    }
-                    else
-                    {
-                        overlap = true;
-                    }
-                    if (overlap)
-                    {
-                        idices.push_front(j);
-                        i = j + 1;
-                        break;
-                    }
-                }
-            }
-            for (const auto &ele : idices)
-            {
-                hpolys.push_back(htemp[ele]);
-            }
-        }
-        else
-        {
-            std::vector<Eigen::MatrixX4d> htemp = bkup_hpolys;
-            if (htemp.size() == 1)
-                {
-                    Eigen::MatrixX4d headPoly = htemp.front();
-                    htemp.insert(htemp.begin(), headPoly);
-                }
-            bkup_hpolys.clear();
-
-            int M = htemp.size();
-            Eigen::MatrixX4d hPoly;
-            bool overlap;
-            std::deque<int> idices;
-            idices.push_front(M - 1);
-            for (int i = M - 1; i >= 0; i--)
-            {
-                for (int j = 0; j < i; j++)
-                {
-                    if (j < i - 1)
-                    {
-                        overlap = geo_utils::overlap(htemp[i], htemp[j], 0.01);
-                    }
-                    else
-                    {
-                        overlap = true;
-                    }
-                    if (overlap)
-                    {
-                        idices.push_front(j);
-                        i = j + 1;
-                        break;
-                    }
-                }
-            }
-            for (const auto &ele : idices)
-            {
-                bkup_hpolys.push_back(htemp[ele]);
-            }
-        }
-        
-    }
-
 
     void yaw_traj_generation(Trajectory<5> _traj, custom_interface_gym::msg::DesTrajectory &des_traj_msg)
     {
@@ -1102,6 +988,7 @@ private:
             traj_gen_time = elapsed_traj;
             bkup_trajstamp = rclcpp::Clock().now();
             _is_bkup_traj_exist = true;
+            _is_traj_exist = false;
             custom_interface_gym::msg::DesTrajectory des_traj_msg;
             des_traj_msg.header.stamp = rclcpp::Clock().now();
             des_traj_msg.header.frame_id = "ground_link";
@@ -1208,6 +1095,7 @@ private:
             traj_gen_time = elapsed_traj;
             trajstamp = rclcpp::Clock().now();
             _is_traj_exist = true;
+            _is_bkup_traj_exist = false;
             custom_interface_gym::msg::DesTrajectory des_traj_msg;
             des_traj_msg.header.stamp = rclcpp::Clock().now();
             des_traj_msg.header.frame_id = "ground_link";
@@ -1338,6 +1226,8 @@ private:
             trajstamp = rclcpp::Clock().now();
             auto del_t = (t_curr - trajstamp).seconds();
             _is_traj_exist = true;
+            _is_bkup_traj_exist = false;
+
             custom_interface_gym::msg::DesTrajectory des_traj_msg;
             des_traj_msg.header.stamp = rclcpp::Clock().now();
             des_traj_msg.header.frame_id = "ground_link";
@@ -1387,7 +1277,7 @@ private:
                              _commit_distance, _max_samples, _sample_portion, _goal_portion, current_yaw, 0.6*max_vel, 0.75*max_vel, weight_t);
         init_planning_time = rclcpp::Clock().now();
         double init_time = (init_planning_time - now_ros).seconds();
-        _rrtPathPlanner.SafeRegionExpansion(0.1, init_time);
+        _rrtPathPlanner.SafeRegionExpansion(0.4, init_time);
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
         if (_rrtPathPlanner.getPathExistStatus())
         {
@@ -1467,6 +1357,7 @@ private:
             {
                 RCLCPP_WARN(this->get_logger(), "Reached committed target but no feasible path exists");
                 _is_traj_exist = false;
+                executeEmergencyStop();
                 return;
             }
             else
@@ -1480,15 +1371,7 @@ private:
                 _path_vector = matrixToVector(_path);
                 getCorridorPoints();
                 auto t1 = std::chrono::steady_clock::now();
-
-                // convexCover(corridor_points, convexCoverRange, 1.0e-6);
-                // convexCoverCIRI_E(corridor_points, convexCoverRange, hpolys, _start_pos, true, 1.0e-6);
-                // convexCoverCIRI_S(corridor_points, convexCoverRange, hpolys, _start_pos, 1.0e-6);
-                // polygon_dilation(hpolys);
-                // convexCoverCIRI(corridor_points, convexCoverRange, hpolys, 1.0e-6);
-                // shortCut();
                 convexCoverCIRI_dynamic(corridor_points4d, convexCoverRange, hpolys, 1.0e-6);
-                // shortCutWithTimeIntervals();
                 auto t2 = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
 
@@ -1724,14 +1607,20 @@ private:
         switch (current_state)
         {
             case INITIAL:
+                std::cout<<"initial case: "<<std::endl;
                 planInitialTraj();
                 if (_is_traj_exist)
                     current_state = INCREMENTAL;
                 else
                 {
-                    current_state = BACKUP;
-                    // current_state = INITIAL;
-                    // executeEmergencyStop();
+                    if(near_dynamic)
+                    {
+                        current_state = BACKUP;
+                    }
+                    else
+                    {
+                        current_state = INITIAL;
+                    }
                 }
                 break;
 
@@ -1739,8 +1628,14 @@ private:
                 planIncrementalTraj();
                 if (!_is_traj_exist)
                 {
-                    current_state = INITIAL;
-                    // executeEmergencyStop();
+                    if (near_dynamic) 
+                    {
+                        current_state = BACKUP;
+                    } 
+                    else 
+                    {
+                        current_state = INITIAL;
+                    }    
                 }
                 break;
 
@@ -1839,71 +1734,6 @@ private:
         des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
         _rrt_des_traj_pub->publish(des_traj_msg);
         _is_traj_exist = false;
-
-        /*
-                if(_start_vel.norm() < 0.01) return;
-        Eigen::Vector3d sp1;
-        bkup_start_pos = _start_pos;
-        bool obs_in = false;
-        Eigen::Vector3d des_dir = (_end_pos - _start_pos).normalized();
-        std::vector<Eigen::Vector3d> vec_pt;
-        vec_pt.push_back(_start_pos), vec_pt.push_back(_start_pos);
-        auto t1 = std::chrono::steady_clock::now();
-        convexCoverCIRI(vec_pt, 1.5, bkup_hpolys, 1e-6, true);
-        double lambda = ray_polygon_intersection(_start_pos, des_dir, bkup_hpolys[0]);
-
-        bkup_goal = _start_pos + lambda * des_dir;
-
-        std::cout<<"bkup_hpolys.size(): "<<bkup_hpolys.size()<<std::endl;
-        auto t2 = std::chrono::steady_clock::now();
-        bkup_convexDecompTime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
-        visCommitTarget(true);
-
-        // shortCut(true);
-        std::cout<<"[bkup check] bkup goal: "<<bkup_goal<<std::endl;
-        Eigen::Vector3d new_traj_start_pos = _start_pos;
-        Eigen::Vector3d new_traj_start_vel = _start_vel;
-        Eigen::Vector3d new_traj_start_acc = _start_acc;
-        std::cout<<"[bkup check] 4"<<std::endl;
-        
-        if(_is_bkup_traj_exist || _is_traj_exist)
-        {
-            std::cout<<"[EMERGENCY STOP CHECK] checking correct traj generation: "<<std::endl;
-            auto t_curr = rclcpp::Clock().now();
-            double del_t;
-            if(_is_bkup_traj_exist)
-            {
-                del_t = (t_curr - bkup_trajstamp).seconds();
-            }
-            else
-            {
-                del_t = (t_curr - trajstamp).seconds();
-            }
-            if(1.25*(bkup_convexDecompTime + bkup_traj_gen_time) < _traj.getTotalDuration() - del_t)
-            {
-                new_traj_start_pos = _traj.getPos(del_t + 1.25*(bkup_traj_gen_time));
-                new_traj_start_vel = _traj.getVel(del_t + 1.25*(bkup_traj_gen_time));
-                new_traj_start_acc = _traj.getAcc(del_t + 1.25*(bkup_traj_gen_time));
-            }
-            std::cout<<"new_traj_start_pos: "<<new_traj_start_pos.transpose()<<std::endl;
-            std::cout<<"new_traj_start_vel: "<<new_traj_start_vel.transpose()<<std::endl;
-            std::cout<<"new_traj_start_acc: "<<new_traj_start_acc.transpose()<<std::endl;
-        }
-        
-        std::cout<<"_start_pos: "<<_start_pos.transpose()<<std::endl;
-        std::cout<<"_bkup_goal: "<<bkup_goal.transpose()<<std::endl;
-        t1 = std::chrono::steady_clock::now();
-        traj_generation(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc, true);
-        if(_is_traj_exist)
-        {
-            current_state = EMERGENCY;
-        }
-        t2 = std::chrono::steady_clock::now();
-        bkup_traj_gen_time = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
-        visualizeTrajectory(_traj, true);
-        visualizePolytope(bkup_hpolys, true);
-        return;
-        */
     }
 
 
@@ -1930,27 +1760,19 @@ private:
         return idx;
     }
 
-    bool checkSafeTrajectory()
+    void checkSafeTrajectory()
     {
         double t_since = 0.0;
-        double delta_t_c = 0.0;
-        if(_is_traj_exist)
-        {
-            delta_t_c = (rclcpp::Time(odom_time.nanoseconds(), trajstamp.get_clock_type()) - trajstamp).seconds();
-            t_since = (trajstamp - pointcloud_receive_time).seconds();
-        }
-        else if(_is_bkup_traj_exist)
-        {
-            delta_t_c = (rclcpp::Time(odom_time.nanoseconds(), trajstamp.get_clock_type()) - bkup_trajstamp).seconds();
-            t_since = (bkup_trajstamp - pointcloud_receive_time).seconds(); 
-        }
-        double T = max(0.0, delta_t_c);
-        double traj_time = _traj.getTotalDuration();
+        double t_since_start = 0.0;
         int dynamic_pcd_size = dynamic_cloud->points.size();
-        // --- static obstacle check (keep your existing static check) ---
-        if(_is_traj_exist || _is_bkup_traj_exist)
+
+        if(_server_active && t_server != -1.0)
         {
-            for(double t = T; t < traj_time; t += (traj_time/10))
+            t_since = (trajstamp - pointcloud_receive_time).seconds();
+            t_since_start = (trajstamp - now_ros).seconds();
+            double traj_time = commit_time * _traj.getTotalDuration();
+            // --- static obstacle check (keep your existing static check) ---
+            for(double t = t_server; t < traj_time; t += 0.1)
             {
                 Eigen::Vector4d pos_t;
                 pos_t.head<3>() = _traj.getPos(t);
@@ -1966,76 +1788,72 @@ private:
                     double static_rad = sqrt(pointRadiusSquaredDistance[0]);
                     if(static_rad < _uav_radius)
                     {
-                        RCLCPP_WARN(this->get_logger(), "Unsafe Trajectory: Hovering");
-                        custom_interface_gym::msg::DesTrajectory des_traj_msg;
-                        des_traj_msg.header.stamp = rclcpp::Clock().now();
-                        des_traj_msg.header.frame_id = "ground_link";
-                        des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
-                        _rrt_des_traj_pub->publish(des_traj_msg);
-                        _is_traj_exist = false;
-                        return false;
+                        visCollisionPoint(_traj.getPos(t));
+                        executeEmergencyStop();
+                        current_state = BACKUP;
+                        return;
                     }
                 }
             }
-        }
-        
-        if(dynamic_pcd_size == 0) return true;
+            
+            if(dynamic_pcd_size == 0) return;
 
-        
-        // parameters (tune these)
-        const double segment_dt = 0.5;            // duration of each linearized segment
-        const double robot_radius = _uav_radius;    // set this in your class
-        const double obstacle_radius = 0.0001; // set this in your class
-        const double combined_radius = robot_radius + obstacle_radius + _safety_margin;
-
-        // build KD-tree nearest neighbors around current robot start (you already do)
-        pcl::PointXYZ searchPoint;
-        searchPoint.x = _start_pos(0);
-        searchPoint.y = _start_pos(1);
-        searchPoint.z = _start_pos(2);
-        pointIdxRadiusSearch.clear();
-        pointRadiusSquaredDistance.clear();
-        int num_obstacles = std::min(dynamic_pcd_size, 10);
-        dynamic_kdtree.nearestKSearch(searchPoint, num_obstacles, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-        bool collision_predicted = false;
-        // For each nearby dynamic obstacle:
-        for(int idx_i = 0; idx_i < num_obstacles; ++idx_i)
-        {
-            int pidx = pointIdxRadiusSearch[idx_i];
-            auto pt = dynamic_cloud->points[pidx];
-            Eigen::Vector3d obs_pos0(pt.x, pt.y, pt.z); // obstacle position at t=0 (now)
-            // Lookup velocity for this obstacle. Make sure dynamic_points_hash uses exact keys or adapt lookup.
-            Eigen::Vector3d obs_vel = dynamic_points_hash[obs_pos0];
-            double dist0 = sqrt(pointRadiusSquaredDistance[idx_i]);
-            if(!_is_traj_exist && !_is_bkup_traj_exist && dist0 < 2.0)
+            double temp_t = commit_time * _traj.getTotalDuration() + 2.0;
+            if(temp_t > _traj.getTotalDuration())
             {
-                collision_predicted = true;
+                temp_t = _traj.getTotalDuration();
             }
-            else
+            for(double t = t_server; t < temp_t; t += 0.1)
             {
-                if(_is_traj_exist || _is_bkup_traj_exist)
+                Eigen::Vector4d pos_t;
+                pos_t.head<3>() = _traj.getPos(t);
+                pos_t[3] = t + t_since_start;
+                double rad = _rrtPathPlanner.radiusSearch(pos_t);
+                if(rad != -1.0 && rad < 0.35)
                 {
-                    for(double t = T; t < 0.8*_traj.getTotalDuration(); t += (traj_time/10))
+                    std::cout<<"################ COLLISION DETECTED UAV FOLLOWING TRAJ ################"<<std::endl;
+                    std::cout<<"collision predicted at time: "<<t<<" in future: "<<std::endl;
+                    std::cout<<"rad: "<<rad<<std::endl;
+
+                    visCollisionPoint(pos_t.head<3>());
+                    if(t - t_server < 2.0)
                     {
-                        Eigen::Vector3d pos_t = obs_pos0 + obs_vel * (t + t_since);
-                        if((pos_t - _traj.getPos(t)).norm() < _uav_radius)
-                        {
-                            collision_predicted = true;
-                        }
+                        current_state = BACKUP;
+                        near_dynamic = true;
+                        return;
+                    }
+                    else
+                    {
+                        current_state = INITIAL;
+                        executeEmergencyStop();
+                        return;
                     }
                 }
-                
             }
-            if(collision_predicted) 
-            {
-                near_dynamic = true;
-                current_state = BACKUP;
-                return false;
-            }
-
+            near_dynamic = false;
         }
-        near_dynamic = false;
-        return true; // no collision predicted
+        else
+        {
+            if(dynamic_pcd_size == 0) return;
+
+            pcl::PointXYZ searchPoint;
+            searchPoint.x = _start_pos(0);
+            searchPoint.y = _start_pos(1);
+            searchPoint.z = _start_pos(2);
+            pointIdxRadiusSearch.clear();
+            pointRadiusSquaredDistance.clear();
+            int num_obstacles = 1;
+            dynamic_kdtree.nearestKSearch(searchPoint, num_obstacles, pointIdxRadiusSearch, pointRadiusSquaredDistance);
+            double radius_closest = sqrt(pointRadiusSquaredDistance[0]);
+            if(radius_closest < 1.5 + _uav_radius)
+            {
+                visCollisionPoint(_start_pos);
+                std::cout<<" ################ COLLISION DETECTED UAV STATIONARY ################"<<std::endl;
+                current_state = BACKUP;
+                near_dynamic = true;
+                return;
+            }
+        }
     }
 
     bool reachedBackupWaypoint() 
@@ -2297,6 +2115,39 @@ private:
             path_visualizer.markers.push_back(point_vis);
         }
         _vis_rrt_path_pub->publish(path_visualizer);
+    }
+
+    void visCollisionPoint(Eigen::Vector3d col_pt)
+    {
+        
+            visualization_msgs::msg::Marker marker;
+            marker.header.frame_id = "ground_link";
+            marker.header.stamp = this->now();
+            marker.ns = "corridor";
+            marker.id = 0;
+            marker.type = visualization_msgs::msg::Marker::SPHERE;
+            marker.action = visualization_msgs::msg::Marker::ADD;
+            
+            // Set position of the marker
+            
+            marker.pose.position.x = col_pt(0);
+            marker.pose.position.y = col_pt(1);
+            marker.pose.position.z = col_pt(2);
+        
+            
+            // Set scale (diameter based on radius)
+            double diameter = 2.0 * 0.25; // Radius to diameter
+            marker.scale.x = diameter;
+            marker.scale.y = diameter;
+            marker.scale.z = diameter;
+
+            // Set color and transparency
+            marker.color.a = 0.5;  // Transparency
+            marker.color.r = 1.0;
+            marker.color.g = 0.0;
+            marker.color.b = 0.0;
+
+            _vis_collision_point->publish(marker);
     }
 
     void visCommitTarget(bool bkup = false)

@@ -134,6 +134,13 @@ def main():
             time.sleep(2)
     except KeyboardInterrupt:
         print("\nStopping all trials early.")
+        print(f"Summary:")
+        print(f"  num_success: {num_success}")
+        print(f"  num_failures: {num_failure}")
+        print(f"    - UAV crashes: {num_crash_failures}")
+        print(f"    - Process crashes: {num_process_failures}")
+        print(f"    - Timeouts: {num_timeout_failures}")
+        print(f"    - Unknown errors: {num_unknown_failures}")
     finally:
         rclpy.shutdown()
         print(f"Summary:")

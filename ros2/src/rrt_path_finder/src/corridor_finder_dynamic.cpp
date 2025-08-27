@@ -192,7 +192,7 @@ void safeRegionRrtStarDynamic::buildTemporalGrid(const std::vector<std::pair<Eig
 {
     temporal_grid.clear();
     double t_start = PCDstartTime;
-    double t_end = t_start + 60.0;
+    double t_end = t_start + 30.0;
     // if(root_node)
     // {
     //     t_end = t_start + 2*getDis(pcd_origin, end_pt)/max_vel;
