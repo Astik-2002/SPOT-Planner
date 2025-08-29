@@ -74,7 +74,7 @@ namespace super_planner {
         /// force return if the seed is not inside the boundary
         if ((bd * ah).maxCoeff() > epsilon_ ||
             (bd * bh).maxCoeff() > epsilon_) {
-//            cout << YELLOW << " -- [WARN] ah, bh not in BD, forced return." << endl;
+           cout << YELLOW << " -- [WARN] ah, bh not in BD, forced return." << endl;
 //            cout << "bd  * ah: " << (bd * ah).transpose().maxCoeff() << endl;
 //            cout << "bd  * bh: " << (bd * bh).transpose().maxCoeff() << endl;
             return INIT_ERROR;
@@ -240,7 +240,7 @@ namespace super_planner {
             }
 
             if(hPoly.array().isNaN().any()) {
-            //                 cout << YELLOW << " -- [CIRI] ERROR! maxVolInsEllipsoid failed." << RESET << endl;
+                            cout << YELLOW << " -- [CIRI] ERROR! hPoly.array().isNaN().any()." << RESET << endl;
             //                 optimized_polytope_.Reset();
             //                 optimized_polytope_.SetPlanes(hPoly);
             //                 optimized_polytope_.SetSeedLine(std::make_pair(a, b));
@@ -255,6 +255,7 @@ namespace super_planner {
             }
 
             if (!MVIE::maxVolInsEllipsoid(hPoly, E)) {
+                cout << YELLOW << " -- [CIRI] ERROR! maxVolInsEllipsoid failed." << RESET << endl;
                 return FAILED;
             }
         }

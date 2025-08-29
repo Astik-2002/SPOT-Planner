@@ -93,7 +93,7 @@ TrajectoryServerYaw()
         command_timer = this->create_wall_timer(
             std::chrono::milliseconds(100), std::bind(&TrajectoryServerYaw::commandCallback, this));
         state_timer = this->create_wall_timer(
-            std::chrono::milliseconds(100), std::bind(&TrajectoryServerYaw::publishServerState, this));
+            std::chrono::milliseconds(10), std::bind(&TrajectoryServerYaw::publishServerState, this));
     }
     
     void publishServerState()

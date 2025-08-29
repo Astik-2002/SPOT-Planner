@@ -78,6 +78,7 @@ class safeRegionRrtStarDynamic
 		double current_yaw, expected_time, average_vel, max_vel;
 		// FLAGs
 		bool inform_status, path_exist_status, global_navi_status, uncertanity;
+		bool _bkup = false;
 
 		Eigen::MatrixXd Path;
 		Eigen::VectorXd Radius;
@@ -123,7 +124,7 @@ class safeRegionRrtStarDynamic
 		void solutionUpdate(double cost_reduction, Eigen::Vector4d target);
 
 		/* main function entries */
-		void SafeRegionExpansion( double time_limit, double root_node_time);
+		void SafeRegionExpansion( double time_limit, double root_node_time, bool bkup = false);
 		void SafeRegionRefine   ( double time_limit);
 		void SafeRegionEvaluate ( double time_limit);
 
@@ -155,7 +156,7 @@ class safeRegionRrtStarDynamic
 		inline Eigen::Vector4d genSample4d();
 
 		Eigen::Vector4d getRootCoords();
-		inline double radiusSearch(Eigen::Vector4d & pt);
+		inline double radiusSearch(Eigen::Vector4d & pt, bool traj_check = false);
 		inline double radiusSearchCollisionPred(Eigen::Vector3d & pt);
 		inline NodePtr_dynamic genNewNode( Eigen::Vector4d & pt, NodePtr_dynamic node_nearst_ptr );
 		inline NodePtr_dynamic findNearestVertex( Eigen::Vector3d & pt );

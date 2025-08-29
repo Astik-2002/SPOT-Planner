@@ -77,7 +77,7 @@ public:
     {
         // Parameters
         this->declare_parameter("safety_margin", 0.9);
-        this->declare_parameter("uav_radius", 0.5);
+        this->declare_parameter("uav_radius", 0.4);
         this->declare_parameter("search_margin", 0.3);
         this->declare_parameter("max_radius", 5.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -86,7 +86,7 @@ public:
         this->declare_parameter("path_find_limit", 5.0);
         this->declare_parameter("max_samples", 10000);
         this->declare_parameter("stop_horizon", 0.5);
-        this->declare_parameter("commit_time", 0.6);
+        this->declare_parameter("commit_time", 0.5);
 
         this->declare_parameter("x_l", -5.0);
         this->declare_parameter("x_h", 70.0);
@@ -645,17 +645,8 @@ private:
         std::vector<Eigen::MatrixX4d> &hpolys,
         const double eps, bool bkup = false)
     {
-        Eigen::Vector3d lowCorner(_x_l, _y_l, _z_l2);
-        Eigen::Vector3d highCorner(_x_h, _y_h, _z_h2);
-        if(bkup)
-        {
-            highCorner(0) = 70.0;
-            highCorner(1) = 20.0;
-            highCorner(2) = 10.0;
-            lowCorner(0) = -10.0;
-            lowCorner(1) = -20;
-            lowCorner(2) = 0.5;
-        }
+        Eigen::Vector3d lowCorner(-10.0, -30.0, 0.5);
+        Eigen::Vector3d highCorner(70.0, 30.0, 5.0);
         hpolys.clear();
         int n = int(path.size());
         
@@ -712,6 +703,7 @@ private:
 
             if (ciri.convexDecomposition(bd, pc, a, b) != super_utils::SUCCESS) {
                 std::cerr << "CIRI decomposition failed." << std::endl;
+                hpolys.push_back(bd);
                 continue;
             }
             pcd_origin = _start_pos;
@@ -729,6 +721,7 @@ private:
                     if (ciri.convexDecomposition(bd, pc, a, a) != super_utils::SUCCESS) 
                     {
                         std::cerr << "CIRI decomposition failed." << std::endl;
+                        hpolys.push_back(bd);
                         continue;
                     }
                     ciri.getPolytope(optimized_poly);
@@ -1142,19 +1135,35 @@ private:
         }
     }
 
-    void traj_generation_fixed_time(Eigen::Vector3d _traj_start_pos, Eigen::Vector3d _traj_start_vel, Eigen::Vector3d _traj_start_acc)
+    void traj_generation_fixed_time(Eigen::Vector3d _traj_start_pos, Eigen::Vector3d _traj_start_vel, Eigen::Vector3d _traj_start_acc, bool bkup = false)
     {
         auto t1 = std::chrono::steady_clock::now();
         // GCopter parameters
         Eigen::Matrix3d iniState;
         Eigen::Matrix3d finState;
         iniState << _traj_start_pos, _traj_start_vel, _traj_start_acc;
-        finState << _corridor_end_pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
+        std::vector<float> chiVec = {10000, 10000, 10000, 10000, 100000};
+
+        if(bkup)
+        {
+            chiVec[0] = 100000;
+            finState << bkup_goal, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
+        }
+        else
+        {
+            finState << _corridor_end_pos, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero();
+        }
         Eigen::VectorXd magnitudeBounds(5);
         Eigen::VectorXd penaltyWeights(5);
         Eigen::VectorXd physicalParams(6);
-        std::vector<float> chiVec = {10000, 10000, 10000, 10000, 100000};
-        magnitudeBounds(0) = max_vel;
+        if(bkup)
+        {
+            magnitudeBounds(0) = 0.6 * max_vel;
+        }
+        else
+        {
+            magnitudeBounds(0) = max_vel;
+        }
         magnitudeBounds(1) = 2.1;
         magnitudeBounds(2) = 1.05;
         magnitudeBounds(3) = 0.5*mass*9.8;
@@ -1177,16 +1186,33 @@ private:
         _traj.clear();
         Eigen::VectorXd time_vec_eig = Eigen::Map<Eigen::VectorXd>(time_vector_poly.data(), time_vector_poly.size());;
         // _gCopter_fixed.setup(iniState, finState, hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, time_vec_eig)
-        if (!_gCopter_fixed.setup(iniState, finState, hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, time_vec_eig))
+        if(bkup)
         {
-            std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
-            _is_traj_exist = false;
-            custom_interface_gym::msg::DesTrajectory des_traj_msg;
-            des_traj_msg.header.stamp = rclcpp::Clock().now();
-            des_traj_msg.header.frame_id = "ground_link";
-            des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
-            _rrt_des_traj_pub->publish(des_traj_msg);
-            return;
+            if (!_gCopter_fixed.setup(iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, time_vec_eig))
+            {
+                std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
+                _is_traj_exist = false;
+                custom_interface_gym::msg::DesTrajectory des_traj_msg;
+                des_traj_msg.header.stamp = rclcpp::Clock().now();
+                des_traj_msg.header.frame_id = "ground_link";
+                des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+                _rrt_des_traj_pub->publish(des_traj_msg);
+                return;
+            }
+        }
+        else
+        {
+            if (!_gCopter_fixed.setup(iniState, finState, hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, time_vec_eig))
+            {
+                std::cout<<"gcopter returned false during setup, traj exist set to false"<<std::endl;
+                _is_traj_exist = false;
+                custom_interface_gym::msg::DesTrajectory des_traj_msg;
+                des_traj_msg.header.stamp = rclcpp::Clock().now();
+                des_traj_msg.header.frame_id = "ground_link";
+                des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+                _rrt_des_traj_pub->publish(des_traj_msg);
+                return;
+            }
         }
         if (std::isinf(_gCopter_fixed.optimize(_traj, relcostto1)))
         {
@@ -1201,33 +1227,44 @@ private:
         }
         if (_traj.getPieceNum() > 0)
         {
-
-            Eigen::Vector3d temp_commit_target = _traj.getPos(_traj.getTotalDuration()*commit_time);
-            if((temp_commit_target - _commit_target.head<3>()).norm() < _uav_radius)
+            if(!bkup)
             {
-                std::cout<<"invalid commit target"<<std::endl;
-                _is_traj_exist = false;
-                current_state = INITIAL;
-                custom_interface_gym::msg::DesTrajectory des_traj_msg;
-                des_traj_msg.header.stamp = rclcpp::Clock().now();
-                des_traj_msg.header.frame_id = "ground_link";
-                des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
-                _rrt_des_traj_pub->publish(des_traj_msg);
-                return;
+                Eigen::Vector3d temp_commit_target = _traj.getPos(_traj.getTotalDuration()*commit_time);
+                if((temp_commit_target - _commit_target.head<3>()).norm() < _uav_radius)
+                {
+                    std::cout<<"invalid commit target"<<std::endl;
+                    _is_traj_exist = false;
+                    current_state = INITIAL;
+                    custom_interface_gym::msg::DesTrajectory des_traj_msg;
+                    des_traj_msg.header.stamp = rclcpp::Clock().now();
+                    des_traj_msg.header.frame_id = "ground_link";
+                    des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
+                    _rrt_des_traj_pub->publish(des_traj_msg);
+                    return;
+                }
+                _commit_target.head<3>() = temp_commit_target;
+                Eigen::Vector4d root_coords = _rrtPathPlanner.getRootCoords();
+                _commit_target[3] = root_coords[3] + _traj.getTotalDuration()*commit_time;
+
+                auto t2 = std::chrono::steady_clock::now();
+                auto elapsed_traj = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
+                traj_gen_time = elapsed_traj;
+                auto t_curr = trajstamp;
+                trajstamp = rclcpp::Clock().now();
+                auto del_t = (t_curr - trajstamp).seconds();
+                _is_traj_exist = true;
+                _is_bkup_traj_exist = false;
             }
-            _commit_target.head<3>() = temp_commit_target;
-            Eigen::Vector4d root_coords = _rrtPathPlanner.getRootCoords();
-            _commit_target[3] = root_coords[3] + _traj.getTotalDuration()*commit_time;
+            else
+            {
+                auto t2 = std::chrono::steady_clock::now();
+                auto elapsed_traj = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
+                bkup_traj_gen_time = elapsed_traj;
+                bkup_trajstamp = rclcpp::Clock().now();
+                _is_traj_exist = false;
+                _is_bkup_traj_exist = true;
 
-            auto t2 = std::chrono::steady_clock::now();
-            auto elapsed_traj = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
-            traj_gen_time = elapsed_traj;
-            auto t_curr = trajstamp;
-            trajstamp = rclcpp::Clock().now();
-            auto del_t = (t_curr - trajstamp).seconds();
-            _is_traj_exist = true;
-            _is_bkup_traj_exist = false;
-
+            }
             custom_interface_gym::msg::DesTrajectory des_traj_msg;
             des_traj_msg.header.stamp = rclcpp::Clock().now();
             des_traj_msg.header.frame_id = "ground_link";
@@ -1257,10 +1294,10 @@ private:
             }
             des_traj_msg.debug_info = "trajectory_id: "+std::to_string(trajectory_id-1);
 
-            if(_is_yaw_enabled)
-            {
-                yaw_traj_generation(_traj, des_traj_msg);
-            }
+            // if(!bkup)
+            // {
+            //     yaw_traj_generation(_traj, des_traj_msg);
+            // }
             _rrt_des_traj_pub->publish(des_traj_msg);
             // std::cout<<std::endl;
             return;
@@ -1271,6 +1308,7 @@ private:
     // Function to plan the initial trajectory using RRT
     void planInitialTraj()
     {
+        _is_bkup_traj_exist = false;
         std::cout<<"[Initial planning] in initial planning callback: "<<std::endl;
         _rrtPathPlanner.reset();
         _rrtPathPlanner.setPt(_start_pos, _end_pos, _x_l, _x_h, _y_l, _y_h, _z_l, _z_h,
@@ -1471,7 +1509,7 @@ private:
                 min_idx = i;
             }
             Eigen::Vector3d rel_vel = vel_obs - _start_vel;            
-            double krep = 50.0;
+            double krep = 5.0;
             // Compute azimuth (phi) and elevation (theta) of rel_vel
             double rel_speed = rel_vel.norm();
             if (rel_speed < 1e-3) continue;
@@ -1521,56 +1559,88 @@ private:
         {
             des_dir = (_end_pos - _start_pos).normalized();
         }
-        std::vector<Eigen::Vector3d> vec_pt;
-        vec_pt.push_back(_start_pos), vec_pt.push_back(_start_pos);
         std::cout<<"[bkup check] 1"<<std::endl;
         auto t1 = std::chrono::steady_clock::now();
-        convexCoverCIRI(vec_pt, 2.0, bkup_hpolys, 1e-6, true);
-        auto t2 = std::chrono::steady_clock::now();
-        bkup_convexDecompTime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
-
-        double lambda = ray_polygon_intersection(_start_pos, des_dir, bkup_hpolys[0]);
+        init_planning_time = rclcpp::Clock().now();
+        double init_time = (init_planning_time - now_ros).seconds();
+        std::vector<Eigen::MatrixX4d> large_hpolys;
+        std::vector<Eigen::Vector3d> vec_pt;
+        vec_pt.push_back(_start_pos), vec_pt.push_back(_start_pos);
+        convexCoverCIRI(vec_pt, 3.0, large_hpolys, true);
+        double lambda = ray_polygon_intersection(_start_pos, des_dir, large_hpolys[0]);
         bkup_goal = _start_pos + lambda * des_dir;
-        if(std::isfinite(bkup_goal[0]) && std::isfinite(bkup_goal[0]) && std::isfinite(bkup_goal[0]))
+        std::cout<<"[bkup check] bkup goal: "<<bkup_goal<<std::endl;
+        Eigen::Vector3d new_traj_start_pos = _start_pos;
+        Eigen::Vector3d new_traj_start_vel = Eigen::Vector3d::Zero();
+        Eigen::Vector3d new_traj_start_acc = Eigen::Vector3d::Zero();
+        std::cout<<"[bkup check] 4"<<std::endl;
+        
+        _rrtPathPlanner.reset();
+        std::cout<<"[bkup check] 5"<<std::endl;
+        // Compute bounding box of size 2.0 around _start_pos and bkup_goal
+        Eigen::Vector3d min_pt = _start_pos.cwiseMin(bkup_goal);
+        Eigen::Vector3d max_pt = _start_pos.cwiseMax(bkup_goal);
+
+        // Expand by 1.0 in each direction (so box size = 2.0)
+        double x_l_bkup = min_pt.x() - 1.0;
+        double x_h_bkup = max_pt.x() + 1.0;
+        double y_l_bkup = min_pt.y() - 1.0;
+        double y_h_bkup = max_pt.y() + 1.0;
+
+        // Now pass to planner
+        _rrtPathPlanner.setPt(
+            _start_pos, bkup_goal,
+            x_l_bkup, x_h_bkup,
+            y_l_bkup, y_h_bkup,
+            _z_l, _z_h,
+            _commit_distance, _max_samples, _sample_portion,
+            _goal_portion, current_yaw, 0.5 * max_vel, 0.6 * max_vel, weight_t
+        );
+        
+        _rrtPathPlanner.SafeRegionExpansion(1.5, init_time);
+        auto bkup_nodelist = _rrtPathPlanner.getTree();
+        std::tie(_path, _radius) = _rrtPathPlanner.getPath();
+
+        if(_rrtPathPlanner.getPathExistStatus() && _path.rows() > 1)
         {
-            visCommitTarget(true);
+            bkup_hpolys.clear();
+            time_vector_poly.clear();
+            _path_vector = matrixToVector(_path);
+            std::cout<<"_path_vector size: "<<_path_vector.size()<<std::endl;
+            convexCoverCIRI_dynamic(_path_vector, convexCoverRange, bkup_hpolys, 1.0e-6);
+            std::cout<<"BKUP_HPOLYS size: "<<bkup_hpolys.size()<<std::endl;
+            std::cout<<"time vector size: "<<time_vector_poly.size()<<std::endl;
+            bkup_goal = _path_vector[_path_vector.size() - 1].head<3>();
         }
         else
         {
-            std::cout<<"[bkup check] infeasible bkup goal "<<std::endl;
-            bkup_goal = _start_pos + (_end_pos - _start_pos).normalized();
+            std::cout<< " -- [BACKUP PLANNING] ERROR! path not found, number of nodes added: "<<bkup_nodelist.size()<<std::endl;
+
+            std::cout<<"[Radius Start pt]: "<<_rrtPathPlanner.radiusSearch(bkup_nodelist[0]->coord)<<std::endl;
+            time_vector_poly.clear();
+            bkup_hpolys = large_hpolys;
+            time_vector_poly.push_back((_start_pos - bkup_goal).norm()/(0.5 * max_vel));
         }
-        // shortCut(true);
-        std::cout<<"[bkup check] bkup goal: "<<bkup_goal<<std::endl;
-        Eigen::Vector3d new_traj_start_pos = _start_pos;
-        Eigen::Vector3d new_traj_start_vel = _start_vel;
-        Eigen::Vector3d new_traj_start_acc = _start_acc;
-        std::cout<<"[bkup check] 4"<<std::endl;
-        
-        if(_is_bkup_traj_exist || _is_traj_exist)
-        {
-            auto t_curr = rclcpp::Clock().now();
-            double del_t;
-            if(_is_bkup_traj_exist)
-            {
-                del_t = (t_curr - bkup_trajstamp).seconds();
-            }
-            else
-            {
-                del_t = (t_curr - trajstamp).seconds();
-            }
-            if(1.25*(bkup_convexDecompTime + bkup_traj_gen_time) < _traj.getTotalDuration() - del_t)
-            {
-                new_traj_start_pos = _traj.getPos(del_t + 1.25*(bkup_traj_gen_time));
-                new_traj_start_vel = _traj.getVel(del_t + 1.25*(bkup_traj_gen_time));
-                new_traj_start_acc = _traj.getAcc(del_t + 1.25*(bkup_traj_gen_time));
-            }
-        }
+        std::cout<<"[bkup check] 7"<<std::endl;
+
+        auto t2 = std::chrono::steady_clock::now();
+        bkup_convexDecompTime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
+        visCommitTarget(true);
+        // if(_server_active)
+        // {
+        //     double del_t = t_server;
+        //     if(1.25*(bkup_convexDecompTime + bkup_traj_gen_time)< _traj.getTotalDuration() - del_t)
+        //     {
+        //         new_traj_start_pos = _traj.getPos(del_t + 1.25*(bkup_traj_gen_time + bkup_convexDecompTime));
+        //         new_traj_start_vel = _traj.getVel(del_t + 1.25*(bkup_traj_gen_time + bkup_convexDecompTime));
+        //         new_traj_start_acc = _traj.getAcc(del_t + 1.25*(bkup_traj_gen_time + bkup_convexDecompTime));
+        //     }
+        // }
         
         std::cout<<"_start_pos: "<<_start_pos.transpose()<<std::endl;
         std::cout<<"_bkup_goal: "<<bkup_goal.transpose()<<std::endl;
         t1 = std::chrono::steady_clock::now();
-        traj_generation_bkup(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc, bkup_goal, dynamic_obs_array);
+        traj_generation_fixed_time(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc, true);
         t2 = std::chrono::steady_clock::now();
         bkup_traj_gen_time = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
 
@@ -1641,9 +1711,7 @@ private:
 
             case BACKUP:
             {
-                auto t_now = rclcpp::Clock().now();
-                auto del_t_bkup = (t_now - bkup_trajstamp).seconds();
-                bool backup_expired = (_is_bkup_traj_exist && del_t_bkup >= _traj.getTotalDuration() * commit_time);
+                bool backup_expired = (_is_bkup_traj_exist && t_server >= _traj.getTotalDuration() * commit_time);
                 bool need_replan_backup = false;
                 if(_is_bkup_traj_exist && backup_expired && (near_dynamic)) need_replan_backup = true;
                 if(!_is_bkup_traj_exist && (near_dynamic)) need_replan_backup = true;
@@ -1734,6 +1802,7 @@ private:
         des_traj_msg.action = des_traj_msg.ACTION_WARN_IMPOSSIBLE;
         _rrt_des_traj_pub->publish(des_traj_msg);
         _is_traj_exist = false;
+        _is_bkup_traj_exist = false;
     }
 
 
@@ -1768,11 +1837,19 @@ private:
 
         if(_server_active && t_server != -1.0)
         {
-            t_since = (trajstamp - pointcloud_receive_time).seconds();
-            t_since_start = (trajstamp - now_ros).seconds();
+            if(_is_bkup_traj_exist)
+            {
+                t_since = (bkup_trajstamp - pointcloud_receive_time).seconds();
+                t_since_start = (bkup_trajstamp - now_ros).seconds();
+            }
+            else
+            {
+                t_since = (trajstamp - pointcloud_receive_time).seconds();
+                t_since_start = (trajstamp - now_ros).seconds();
+            }
             double traj_time = commit_time * _traj.getTotalDuration();
             // --- static obstacle check (keep your existing static check) ---
-            for(double t = t_server; t < traj_time; t += 0.1)
+            for(double t = t_server + 1.0; t < traj_time; t += 0.1)
             {
                 Eigen::Vector4d pos_t;
                 pos_t.head<3>() = _traj.getPos(t);
@@ -1798,27 +1875,29 @@ private:
             
             if(dynamic_pcd_size == 0) return;
 
-            double temp_t = commit_time * _traj.getTotalDuration() + 2.0;
+            double temp_t = commit_time * _traj.getTotalDuration() + 1.0;
             if(temp_t > _traj.getTotalDuration())
             {
                 temp_t = _traj.getTotalDuration();
             }
-            for(double t = t_server; t < temp_t; t += 0.1)
+            for(double t = t_server + 1.0; t < temp_t; t += 0.1)
             {
                 Eigen::Vector4d pos_t;
                 pos_t.head<3>() = _traj.getPos(t);
                 pos_t[3] = t + t_since_start;
-                double rad = _rrtPathPlanner.radiusSearch(pos_t);
-                if(rad != -1.0 && rad < 0.35)
+                double rad = _rrtPathPlanner.radiusSearch(pos_t, true);
+                if(rad != -1.0 && rad < _uav_radius-_search_margin && _start_pos[0] < 20.0)
                 {
+                    if(_is_bkup_traj_exist && (t - (t_server + 1.0)) < 3.0) continue;
                     std::cout<<"################ COLLISION DETECTED UAV FOLLOWING TRAJ ################"<<std::endl;
                     std::cout<<"collision predicted at time: "<<t<<" in future: "<<std::endl;
                     std::cout<<"rad: "<<rad<<std::endl;
 
                     visCollisionPoint(pos_t.head<3>());
-                    if(t - t_server < 2.0)
+                    if(t - t_server < 3.0)
                     {
                         current_state = BACKUP;
+                        executeEmergencyStop();
                         near_dynamic = true;
                         return;
                     }
@@ -1832,7 +1911,7 @@ private:
             }
             near_dynamic = false;
         }
-        else
+        else  if(!_is_bkup_traj_exist && !_is_traj_exist)
         {
             if(dynamic_pcd_size == 0) return;
 
@@ -1842,18 +1921,39 @@ private:
             searchPoint.z = _start_pos(2);
             pointIdxRadiusSearch.clear();
             pointRadiusSquaredDistance.clear();
+
             int num_obstacles = 1;
             dynamic_kdtree.nearestKSearch(searchPoint, num_obstacles, pointIdxRadiusSearch, pointRadiusSquaredDistance);
-            double radius_closest = sqrt(pointRadiusSquaredDistance[0]);
-            if(radius_closest < 1.5 + _uav_radius)
-            {
-                visCollisionPoint(_start_pos);
-                std::cout<<" ################ COLLISION DETECTED UAV STATIONARY ################"<<std::endl;
-                current_state = BACKUP;
-                near_dynamic = true;
-                return;
+
+            Eigen::Vector3d obs_pos(dynamic_cloud->points[pointIdxRadiusSearch[0]].x,
+                                    dynamic_cloud->points[pointIdxRadiusSearch[0]].y,
+                                    dynamic_cloud->points[pointIdxRadiusSearch[0]].z);
+
+            Eigen::Vector3d rel_pos = obs_pos - _start_pos;
+            if(rel_pos.norm() > 2.5) return;
+            Eigen::Vector3d rel_vel = dynamic_points_hash[obs_pos] - _start_vel; // obstacle velocity
+
+            double closing_rate = rel_pos.dot(rel_vel);
+            if (closing_rate < 0) { // only if obstacle is moving towards UAV
+                double rel_speed_sq = rel_vel.squaredNorm();
+                if (rel_speed_sq > 1e-6) {
+                    double t_closest = -closing_rate / rel_speed_sq;
+                    if (t_closest >= 0) {
+                        Eigen::Vector3d closest_point = rel_pos + t_closest * rel_vel;
+                        double dist_closest = closest_point.norm();
+
+                        if (dist_closest < 2.0 * _uav_radius) {
+                            visCollisionPoint(_start_pos);
+                            std::cout << " ###### COLLISION COURSE DETECTED ###### " << std::endl;
+                            current_state = BACKUP;
+                            near_dynamic = true;
+                            return;
+                        }
+                    }
+                }
             }
         }
+
     }
 
     bool reachedBackupWaypoint() 

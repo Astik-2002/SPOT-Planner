@@ -284,7 +284,7 @@ inline pair<double, double> safeRegionRrtStarDynamic::getDisMetric(const Eigen::
     return make_pair(dS, dT);
 }
 
-inline double safeRegionRrtStarDynamic::radiusSearch(Vector4d & search_Pt) {     
+inline double safeRegionRrtStarDynamic::radiusSearch(Vector4d & search_Pt, bool traj_check) {     
     double d_origin = (pcd_origin - search_Pt.head<3>()).norm();
     if(d_origin > sample_range + max_radius)
     {
@@ -305,9 +305,12 @@ inline double safeRegionRrtStarDynamic::radiusSearch(Vector4d & search_Pt) {
     if (!pointRadiusSquaredDistance.empty()) {
         map_dist = sqrt(pointRadiusSquaredDistance[0]);
     }
-    if(map_dist < (safety_margin + search_margin))
+    if(traj_check == false)
     {
-        return 0.00;
+        if(map_dist < (safety_margin + search_margin))
+        {
+            return 0.00;
+        }
     }
     double dynamic_dist = INFINITY;
     dynamic_dist = queryDynamicObstacles(search_Pt);
@@ -744,8 +747,10 @@ inline int safeRegionRrtStarDynamic::checkNodeRelation(NodePtr_dynamic node_pare
     else if((dis + 0.1) < 0.95 * (node_parent->radius + node_child->radius))
         status = -1;
     else
-        status = 0;
-    
+    {
+        if(_bkup) status = -1;
+        else status = 0;
+    }    
     return status;
 }
 
@@ -973,7 +978,7 @@ void safeRegionRrtStarDynamic::treeDestruct() {
     node_raw_to_shared_map.clear();
 }
 
-void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double root_node_time) {   
+void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double root_node_time, bool bkup) {   
     auto time_bef_expand = chrono::steady_clock::now();
     kdTree_ = kd_create(4);
     commit_root.head<3>() = start_pt;
@@ -983,7 +988,7 @@ void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double roo
     rand_idx = uniform_real_distribution<double>(root_node_time, root_node_time + 4*getDis(start_pt, end_pt)/max_vel);
 
     recordNode(root_node);
-
+    _bkup = bkup;
     float pos4d[4] = {(float)root_node->coord(0), (float)root_node->coord(1), (float)root_node->coord(2), (float)root_node->coord(3)};
     kd_insertf(kdTree_, pos4d, root_node.get());
     int iter_count;
@@ -1042,7 +1047,21 @@ void safeRegionRrtStarDynamic::SafeRegionExpansion(double time_limit, double roo
 
         if(checkEnd(node_new_ptr)) {
             if(!inform_status) best_end_ptr = node_new_ptr;
-            
+            if(_bkup)
+            {
+                EndList.push_back(node_new_ptr);
+                updateHeuristicRegion(node_new_ptr);
+                inform_status = true;
+                pos4d[0] = (float)node_new_ptr->coord(0);
+                pos4d[1] = (float)node_new_ptr->coord(1);
+                pos4d[2] = (float)node_new_ptr->coord(2);
+                pos4d[3] = (float)node_new_ptr->coord(3);
+                kd_insertf(kdTree_, pos4d, node_new_ptr.get());
+
+                recordNode(node_new_ptr);
+                treePrune(node_new_ptr);      
+                break;
+            }
             EndList.push_back(node_new_ptr);
             updateHeuristicRegion(node_new_ptr);
             inform_status = true;  

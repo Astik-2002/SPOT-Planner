@@ -384,6 +384,7 @@ class AviaryWrapper(Node):
         if(msg.hover):
             if not self.is_hover_pos_set:
                 self.hover_pos = np.array([[msg.position.x, msg.position.y, msg.position.z]]).flatten()
+                self.des_vel = np.zeros(3).flatten()
                 # print('hover position set')
                 # print('current_pos: ',self.pos, 'hover_pos: ',self.hover_pos)
                 self.is_hover_pos_set = True
