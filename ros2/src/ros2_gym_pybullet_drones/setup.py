@@ -38,6 +38,9 @@ setup(
             'noise_gen = ros2_gym_pybullet_drones.noise_gen:main',
             'model_publisher = ros2_gym_pybullet_drones.model_publisher:main',
             'benchmark_toast = ros2_gym_pybullet_drones.benchmark_TOAST:main',
+            'benchmark_pred_occ_planner = ros2_gym_pybullet_drones.benchmark_pred_occ_planner:main',
+            'benchmark_static = ros2_gym_pybullet_drones.benchmark_static:main',
+            'benchmark_super = ros2_gym_pybullet_drones.benchmark_super:main',
 
         ],
     },

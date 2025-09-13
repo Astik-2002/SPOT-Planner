@@ -51,7 +51,7 @@ class AviaryWrapper(Node):
         self.timer_freq_hz = 50
         timer_period_sec = 1/self.timer_freq_hz
         self.R = 0.0
-        self.H = 0.8
+        self.H = 2.0
         self.INIT_XYZS = np.array([[0.0, self.R, self.H]])
         self.INIT_RPYS = np.array([[0, 0, 0]])
         self.des_yaw = 0
@@ -72,7 +72,7 @@ class AviaryWrapper(Node):
                            obstacles=True,
                            dynamic_obs = self.is_dynamic,
                            static_obs = self.is_static,
-                           num_obstacles = 20,
+                           num_obstacles = 30,
                            deg360=self.lidar,
                            user_debug_gui=False,
                            environment_file="environment_31.csv"
@@ -192,7 +192,6 @@ class AviaryWrapper(Node):
                 bbox.height = 5.0
                 bbox.width = 2*obs["radius"] + 0.5
                 bbox.length = 2*obs["radius"] + 0.5
-
                 bbox_arr.boxes.append(bbox)
 
             if self._is_vis_active:
@@ -278,6 +277,8 @@ class AviaryWrapper(Node):
 
         
         self.broadcast_transform(0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, "ground_link", "map")
+        self.broadcast_transform(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, "world", "ground_link")
+
         self.broadcast_transform(msg.data[0], msg.data[1], msg.data[2], msg.data[3], msg.data[4], msg.data[5], msg.data[6], "base_link", "ground_link")
         odom = Odometry()
         odom.header.frame_id = "ground_link"
