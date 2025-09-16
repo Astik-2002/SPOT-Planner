@@ -649,7 +649,7 @@ namespace gcopter_fixed
             }
             if (!processCorridor(hPolytopes, vPolytopes))
             {
-                std::cout<<"process corridor returned false: "<<std::endl;
+                // td::cout<<"process corridor returned false: "<<std::endl;
                 return false;
             }
 
@@ -662,18 +662,18 @@ namespace gcopter_fixed
             allocSpeed = magnitudeBd(0) * 3.0;
             getShortestPath(headPVA.col(0), tailPVA.col(0), vPolytopes, smoothEps, shortPath);
             const Eigen::Matrix3Xd deltas = shortPath.rightCols(polyN) - shortPath.leftCols(polyN);
-            std::cout<<"deltas: "<<deltas.transpose()<<std::endl;
+            // td::cout<<"deltas: "<<deltas.transpose()<<std::endl;
             pieceIdx = (deltas.colwise().norm() / lengthPerPiece).cast<int>().transpose();
             pieceIdx.array() += 1;
             pieceN = pieceIdx.sum();
-            std::cout<<"pieceN before spatial dim update: "<<pieceN<<std::endl;
+            // td::cout<<"pieceN before spatial dim update: "<<pieceN<<std::endl;
             spatialDim = 0;
             vPolyIdx.resize(pieceN - 1);
             hPolyIdx.resize(pieceN);
             for (int i = 0, j = 0, k; i < polyN; i++)
             {
                 k = pieceIdx(i);
-                std::cout<<"spatial dimension testing: "<<k<<std::endl;
+                // td::cout<<"spatial dimension testing: "<<k<<std::endl;
                 for (int l = 0; l < k; l++, j++)
                 {
                     if (l < k - 1)
@@ -701,14 +701,14 @@ namespace gcopter_fixed
             gradByPoints.resize(3, pieceN - 1);
             if(times.size() != pieceN)
             {
-                std::cout<<"FUBAR potential ############# "<<std::endl;
+                // td::cout<<"FUBAR potential ############# "<<std::endl;
             }
             partialGradByCoeffs.resize(6 * pieceN, 3);
-            std::cout << "polyN: " << polyN << std::endl;
-            std::cout << "pieceIdx: " << pieceIdx.transpose() << std::endl;
-            std::cout << "pieceN: " << pieceN << std::endl;
-            std::cout << "spatialDim: " << spatialDim << std::endl;
-            std::cout << "times size: " << times.size() << std::endl;
+            // td::cout << "polyN: " << polyN << std::endl;
+            // td::cout << "pieceIdx: " << pieceIdx.transpose() << std::endl;
+            // td::cout << "pieceN: " << pieceN << std::endl;
+            // td::cout << "spatialDim: " << spatialDim << std::endl;
+            // td::cout << "times size: " << times.size() << std::endl;
             return true;
         }
 
@@ -716,7 +716,7 @@ namespace gcopter_fixed
                                const double &relCostTol)
         {
             if (spatialDim == 0) {
-                std::cout<<"points in 1 poly case: "<<points.transpose()<<std::endl;
+                // td::cout<<"points in 1 poly case: "<<points.transpose()<<std::endl;
                 minco.setParameters(points, times);
                 minco.getTrajectory(traj);
 

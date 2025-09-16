@@ -76,8 +76,8 @@ public:
                           dynamic_cloud(new pcl::PointCloud<pcl::PointXYZ>())
     {
         // Parameters
-        this->declare_parameter("safety_margin", 0.9);
-        this->declare_parameter("uav_radius", 0.4);
+        this->declare_parameter("safety_margin", 1.0);
+        this->declare_parameter("uav_radius", 0.5);
         this->declare_parameter("search_margin", 0.3);
         this->declare_parameter("max_radius", 5.0);
         this->declare_parameter("refine_portion", 0.80);
@@ -324,7 +324,7 @@ private:
     rclcpp::Time now_ros;
     std::vector<int>     pointIdxRadiusSearch;
     std::vector<float>   pointRadiusSquaredDistance;
-    bool force_test_backup = false;  // Set to false after testing
+    bool force_test_backup = false, disable_bkup = true;  // Set to false after testing
     bool near_dynamic = false;
     bool _server_active = false;
     double t_server = -1.0;
@@ -332,6 +332,10 @@ private:
     std::mt19937 gen;
     double weight_t = 0.3;
     std::unordered_map<Eigen::Vector3d, Eigen::Vector3d, Vec3dHash, Vec3dEqual> dynamic_points_hash{0, Vec3dHash(1e-6), Vec3dEqual(1e-6)};
+    int num_bkup = 0.0;
+    double time_initial = 0.0;
+    double time_incremental = 0.0;
+    double time_bkup = 0.0;
     float random_between(float lower, float upper) 
     {
         std::uniform_real_distribution<float> dis(lower, upper);
@@ -1232,7 +1236,7 @@ private:
                 Eigen::Vector3d temp_commit_target = _traj.getPos(_traj.getTotalDuration()*commit_time);
                 if((temp_commit_target - _commit_target.head<3>()).norm() < _uav_radius)
                 {
-                    std::cout<<"invalid commit target"<<std::endl;
+                    // std::cout<<"invalid commit target"<<std::endl;
                     _is_traj_exist = false;
                     current_state = INITIAL;
                     custom_interface_gym::msg::DesTrajectory des_traj_msg;
@@ -1309,18 +1313,19 @@ private:
     void planInitialTraj()
     {
         _is_bkup_traj_exist = false;
-        std::cout<<"[Initial planning] in initial planning callback: "<<std::endl;
+        // std::cout<<"[Initial planning] in initial planning callback: "<<std::endl;
         _rrtPathPlanner.reset();
         _rrtPathPlanner.setPt(_start_pos, _end_pos, _x_l, _x_h, _y_l, _y_h, _z_l, _z_h,
                              _commit_distance, _max_samples, _sample_portion, _goal_portion, current_yaw, 0.6*max_vel, 0.75*max_vel, weight_t);
         init_planning_time = rclcpp::Clock().now();
+        auto initial_start = std::chrono::steady_clock::now();
         double init_time = (init_planning_time - now_ros).seconds();
         _rrtPathPlanner.SafeRegionExpansion(0.4, init_time);
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
         if (_rrtPathPlanner.getPathExistStatus())
         {
             // Generate trajectory
-            std::cout<<"[Initial planning] initial path found: "<<_path.rows()<<std::endl;
+            // std::cout<<"[Initial planning] initial path found: "<<_path.rows()<<std::endl;
             _path_vector = matrixToVector(_path);
             getCorridorPoints();
             auto t1 = std::chrono::steady_clock::now();
@@ -1330,7 +1335,7 @@ private:
             auto elapsed_convex = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
 
             convexDecompTime = elapsed_convex;
-            std::cout<<"[Initial planning] time taken in corridor generation "<<elapsed_convex<<std::endl;
+            // std::cout<<"[Initial planning] time taken in corridor generation "<<elapsed_convex<<std::endl;
             Eigen::Vector3d new_start_pos = _start_pos;
             Eigen::Vector3d new_start_vel = _start_vel;
             Eigen::Vector3d new_start_acc{0.0, 0.0, 0.0};
@@ -1349,9 +1354,15 @@ private:
             }
             traj_generation_fixed_time(new_start_pos, new_start_vel, new_start_acc);
             // traj_generation(new_start_pos, new_start_vel, new_start_acc);
+            auto t3 = std::chrono::steady_clock::now();
+            auto elapsed_gcopter = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count()*0.001;
 
             if(_is_traj_exist)
             {
+                auto initial_end = std::chrono::steady_clock::now();
+                time_initial = std::chrono::duration_cast<std::chrono::duration<double>>(initial_end - initial_start).count();
+                std::cout<<"initial planning complete time: "<<time_initial<<std::endl;
+                std::cout<<"time taken in convex decomp: "<<elapsed_convex<<" and traj gen: "<<elapsed_gcopter<<std::endl;
                 auto pathlist = _rrtPathPlanner.getPathList();
                 int idx = newrootindex();
 
@@ -1360,9 +1371,7 @@ private:
                 std::cout << "picked root_node(sanity check): " << _rrtPathPlanner.getRootCoords().transpose() << std::endl;
 
                 visualizePolytope(hpolys);
-                visualizeObs(tangent_obs, 2);
                 visualizeTrajectory(_traj, false);
-
             }      
 
         }
@@ -1371,7 +1380,7 @@ private:
             RCLCPP_WARN(this->get_logger(), "No path found in initial trajectory planning");
 
             auto nlist = _rrtPathPlanner.getSelectedNodeList();
-            std::cout<<"[number of nodes] : "<<nlist.size()<<std::endl;
+            // std::cout<<"[number of nodes] : "<<nlist.size()<<std::endl;
             _is_traj_exist = false;
             current_state = INITIAL;
         }
@@ -1400,9 +1409,8 @@ private:
             }
             else
             {
-                // Reset the root of the RRT planner
-                // Get the updated path and publish it
-                // std::cout<<"wrong clock debug 1"<<std::endl;
+                auto incremental_start = std::chrono::steady_clock::now();
+
                 auto t_curr = rclcpp::Clock().now();;
                 auto del_t = (t_curr - trajstamp).seconds();
                 std::tie(_path, _radius) = _rrtPathPlanner.getPath();
@@ -1413,7 +1421,7 @@ private:
                 auto t2 = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
 
-                std::cout<<"[Incremental planner] reached committed target, time taken in corridor generation = "<<elapsed<<std::endl;
+                // std::cout<<"[Incremental planner] reached committed target, time taken in corridor generation = "<<elapsed<<std::endl;
                 Eigen::Vector3d new_traj_start_pos = _traj.getPos(_traj.getTotalDuration());
                 Eigen::Vector3d new_traj_start_vel{0.0, 0.0, 0.0};
                 Eigen::Vector3d new_traj_start_acc{0.0, 0.0, 0.0};
@@ -1429,22 +1437,22 @@ private:
                 convexDecompTime = elapsed;
 
                 traj_generation_fixed_time(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
+                auto t3 = std::chrono::steady_clock::now();
+                auto elapsed_gcopter = std::chrono::duration_cast<std::chrono::milliseconds>(t3 - t2).count()*0.001;
+
                 // traj_generation(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc);
 
                 // std::cout<<"[incremental planner] seg debug 2"<<std::endl;
 
                 if(_is_traj_exist)
                 {
+                    auto incremental_end = std::chrono::steady_clock::now();
+                    time_incremental = std::chrono::duration_cast<std::chrono::milliseconds>(incremental_end - incremental_start).count()*0.001;
+                    std::cout<<"time spent in incremental planning: "<<time_incremental<<std::endl;
+                    std::cout<<"time spent in convex_decomp: "<<convexDecompTime<<" gcopter: "<<elapsed_gcopter<<std::endl;
                     auto pathlist = _rrtPathPlanner.getPathList();
                     int idx = newrootindex();
-                    // std::cout << "picked root_node: " << pathlist[idx]->coord.transpose() << std::endl;
-                            // std::cout << "picked root_node(sanity check): " << _rrtPathPlanner.getRootCoords().transpose() << std::endl;
-
                     _rrtPathPlanner.resetRoot(idx);
-                    std::cout << "picked root_node(sanity check): " << _rrtPathPlanner.getRootCoords().transpose() << std::endl;
-
-                    // std::cout<<"[incremental planner] seg debug 3"<<std::endl;
-
                 }
                 else
                 {
@@ -1551,7 +1559,7 @@ private:
         Eigen::Vector3d sp1;
         bkup_start_pos = _start_pos;
         Eigen::Vector3d des_dir(0.0, 0.0, 0.0);
-        std::cout<<"[bkup check] 2"<<std::endl;
+        // std::cout<<"[bkup check] 2"<<std::endl;
         int min_idx = 0;
         bool obs_in = false;
         des_dir = bkupDirection();
@@ -1559,7 +1567,7 @@ private:
         {
             des_dir = (_end_pos - _start_pos).normalized();
         }
-        std::cout<<"[bkup check] 1"<<std::endl;
+        // std::cout<<"[bkup check] 1"<<std::endl;
         auto t1 = std::chrono::steady_clock::now();
         init_planning_time = rclcpp::Clock().now();
         double init_time = (init_planning_time - now_ros).seconds();
@@ -1569,14 +1577,14 @@ private:
         convexCoverCIRI(vec_pt, 3.0, large_hpolys, true);
         double lambda = ray_polygon_intersection(_start_pos, des_dir, large_hpolys[0]);
         bkup_goal = _start_pos + lambda * des_dir;
-        std::cout<<"[bkup check] bkup goal: "<<bkup_goal<<std::endl;
+        // std::cout<<"[bkup check] bkup goal: "<<bkup_goal<<std::endl;
         Eigen::Vector3d new_traj_start_pos = _start_pos;
         Eigen::Vector3d new_traj_start_vel = Eigen::Vector3d::Zero();
         Eigen::Vector3d new_traj_start_acc = Eigen::Vector3d::Zero();
-        std::cout<<"[bkup check] 4"<<std::endl;
+        // std::cout<<"[bkup check] 4"<<std::endl;
         
         _rrtPathPlanner.reset();
-        std::cout<<"[bkup check] 5"<<std::endl;
+        // std::cout<<"[bkup check] 5"<<std::endl;
         // Compute bounding box of size 2.0 around _start_pos and bkup_goal
         Eigen::Vector3d min_pt = _start_pos.cwiseMin(bkup_goal);
         Eigen::Vector3d max_pt = _start_pos.cwiseMax(bkup_goal);
@@ -1597,7 +1605,7 @@ private:
             _goal_portion, current_yaw, 0.5 * max_vel, 0.6 * max_vel, weight_t
         );
         
-        _rrtPathPlanner.SafeRegionExpansion(1.5, init_time);
+        _rrtPathPlanner.SafeRegionExpansion(1.5, init_time, true);
         auto bkup_nodelist = _rrtPathPlanner.getTree();
         std::tie(_path, _radius) = _rrtPathPlanner.getPath();
 
@@ -1606,22 +1614,22 @@ private:
             bkup_hpolys.clear();
             time_vector_poly.clear();
             _path_vector = matrixToVector(_path);
-            std::cout<<"_path_vector size: "<<_path_vector.size()<<std::endl;
+            // std::cout<<"_path_vector size: "<<_path_vector.size()<<std::endl;
             convexCoverCIRI_dynamic(_path_vector, convexCoverRange, bkup_hpolys, 1.0e-6);
-            std::cout<<"BKUP_HPOLYS size: "<<bkup_hpolys.size()<<std::endl;
-            std::cout<<"time vector size: "<<time_vector_poly.size()<<std::endl;
+            // std::cout<<"BKUP_HPOLYS size: "<<bkup_hpolys.size()<<std::endl;
+            // std::cout<<"time vector size: "<<time_vector_poly.size()<<std::endl;
             bkup_goal = _path_vector[_path_vector.size() - 1].head<3>();
         }
         else
         {
-            std::cout<< " -- [BACKUP PLANNING] ERROR! path not found, number of nodes added: "<<bkup_nodelist.size()<<std::endl;
+            // std::cout<< " -- [BACKUP PLANNING] ERROR! path not found, number of nodes added: "<<bkup_nodelist.size()<<std::endl;
 
-            std::cout<<"[Radius Start pt]: "<<_rrtPathPlanner.radiusSearch(bkup_nodelist[0]->coord)<<std::endl;
+            // std::cout<<"[Radius Start pt]: "<<_rrtPathPlanner.radiusSearch(bkup_nodelist[0]->coord)<<std::endl;
             time_vector_poly.clear();
             bkup_hpolys = large_hpolys;
             time_vector_poly.push_back((_start_pos - bkup_goal).norm()/(0.5 * max_vel));
         }
-        std::cout<<"[bkup check] 7"<<std::endl;
+        // std::cout<<"[bkup check] 7"<<std::endl;
 
         auto t2 = std::chrono::steady_clock::now();
         bkup_convexDecompTime = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
@@ -1637,14 +1645,14 @@ private:
         //     }
         // }
         
-        std::cout<<"_start_pos: "<<_start_pos.transpose()<<std::endl;
-        std::cout<<"_bkup_goal: "<<bkup_goal.transpose()<<std::endl;
+        // std::cout<<"_start_pos: "<<_start_pos.transpose()<<std::endl;
+        // std::cout<<"_bkup_goal: "<<bkup_goal.transpose()<<std::endl;
         t1 = std::chrono::steady_clock::now();
         traj_generation_fixed_time(new_traj_start_pos, new_traj_start_vel, new_traj_start_acc, true);
         t2 = std::chrono::steady_clock::now();
         bkup_traj_gen_time = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count()*0.001;
 
-        std::cout<<"[bkup check] 6"<<std::endl;
+        // std::cout<<"[bkup check] 6"<<std::endl;
         if(_is_bkup_traj_exist)
         {
             visualizePolytope(bkup_hpolys);
@@ -1677,7 +1685,7 @@ private:
         switch (current_state)
         {
             case INITIAL:
-                std::cout<<"initial case: "<<std::endl;
+                // std::cout<<"initial case: "<<std::endl;
                 planInitialTraj();
                 if (_is_traj_exist)
                     current_state = INCREMENTAL;
@@ -1711,18 +1719,25 @@ private:
 
             case BACKUP:
             {
+                if(disable_bkup)
+                {
+                    current_state = INITIAL;
+                    return;
+                }
                 bool backup_expired = (_is_bkup_traj_exist && t_server >= _traj.getTotalDuration() * commit_time);
                 bool need_replan_backup = false;
                 if(_is_bkup_traj_exist && backup_expired && (near_dynamic)) need_replan_backup = true;
                 if(!_is_bkup_traj_exist && (near_dynamic)) need_replan_backup = true;
-                std::cout<<"[Backup] need backup? "<<need_replan_backup<<" near dynamic obstacles? "<<near_dynamic<<std::endl;
+                // std::cout<<"[Backup] need backup? "<<need_replan_backup<<" near dynamic obstacles? "<<near_dynamic<<std::endl;
                 if(!need_replan_backup)
                 {
                     current_state = INITIAL;    
                 }
                 if (need_replan_backup)
                 {
-                    std::cout << "[Backup] Recomputing backup..." << std::endl;
+                    num_bkup += 1;
+                    std::cout<<"number of backup replans so far: "<<num_bkup<<std::endl;
+                    // std::cout << "[Backup] Recomputing backup..." << std::endl;
                     planBackupTraj();
                     if (!_is_bkup_traj_exist)
                     {
@@ -1811,7 +1826,7 @@ private:
         double min_dist = INFINITY;
         auto plist = _rrtPathPlanner.getPathList();
         int idx = plist.size() - 1;
-        std::cout << "_commit_target: " << _commit_target.transpose() << std::endl;
+        // std::cout << "_commit_target: " << _commit_target.transpose() << std::endl;
         
         for (int i = plist.size() - 1; i >= 0; i--)
         {
@@ -1930,7 +1945,7 @@ private:
                                     dynamic_cloud->points[pointIdxRadiusSearch[0]].z);
 
             Eigen::Vector3d rel_pos = obs_pos - _start_pos;
-            if(rel_pos.norm() > 2.5) return;
+            if(rel_pos.norm() > 3.5) return;
             Eigen::Vector3d rel_vel = dynamic_points_hash[obs_pos] - _start_vel; // obstacle velocity
 
             double closing_rate = rel_pos.dot(rel_vel);

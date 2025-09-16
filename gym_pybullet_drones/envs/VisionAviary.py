@@ -386,6 +386,7 @@ class VisionAviary(BaseAviary):
                 radius = 0.4
             if(num == 3):
                 radius = 0.5
+                print("large radius obj selected: ")
             # Generate random initial positions within bounds
             d_uav = -1
             while d_uav < 2.0:

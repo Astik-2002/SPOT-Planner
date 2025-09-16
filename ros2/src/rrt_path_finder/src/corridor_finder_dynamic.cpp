@@ -76,11 +76,10 @@ void safeRegionRrtStarDynamic::setPt(Vector3d startPt, Vector3d endPt, double xl
     rand_x_in = uniform_real_distribution<double>(start_pt(0) - sample_range, start_pt(0) + sample_range);
     rand_y_in = uniform_real_distribution<double>(start_pt(1) - sample_range, start_pt(1) + sample_range);
     average_vel = _average_vel;
-    weightT = weight_t; // cannot be more than 1
-    assert(weightT > 0.0 && weightT < 1.0);
     max_vel = _max_vel;
+    weightT = max_vel;
     max_radius = 2*max_vel*delta_t;
-    min_distance = (end_pt - start_pt).norm() * ((1-weightT) + weightT / max_vel);
+    min_distance = (end_pt - start_pt).norm() * (1 + weightT / max_vel);
     translation_inf = (start_pt + end_pt) / 2.0;
 
     Eigen::Vector3d xtf, ytf, ztf, downward(0, 0, -1);
@@ -192,7 +191,7 @@ void safeRegionRrtStarDynamic::buildTemporalGrid(const std::vector<std::pair<Eig
 {
     temporal_grid.clear();
     double t_start = PCDstartTime;
-    double t_end = t_start + 30.0;
+    double t_end = t_start + 8.0;
     // if(root_node)
     // {
     //     t_end = t_start + 2*getDis(pcd_origin, end_pt)/max_vel;
@@ -223,7 +222,7 @@ double safeRegionRrtStarDynamic::queryDynamicObstacles(const Eigen::Vector4d& qu
     double t_q = query_pt(3);
     Eigen::Vector3d query_pos = query_pt.head<3>();
     double min_dist = INFINITY;
-    for(double t = t_q; t < t_q + 2*delta_t; t += time_resolution)
+    for(double t = t_q; t < t_q + delta_t; t += time_resolution)
     {
         int t_bin = static_cast<int>(t / time_resolution);
         if (!temporal_grid.count(t_bin)) 
@@ -539,7 +538,7 @@ void safeRegionRrtStarDynamic::solutionUpdate(double cost_reduction, Vector4d ta
     for(auto nodeptr: NodeList) {
         nodeptr->g -= cost_reduction;
     }
-    min_distance = getDis(target3d, end_pt) * ((1 - weightT) + weightT/max_vel);
+    min_distance = getDis(target3d, end_pt) * ((1) + weightT/max_vel);
     
     translation_inf = (target3d + end_pt) / 2.0;
 
@@ -559,10 +558,10 @@ void safeRegionRrtStarDynamic::solutionUpdate(double cost_reduction, Vector4d ta
 }
 
 void safeRegionRrtStarDynamic::updateHeuristicRegion(NodePtr_dynamic update_end_node) {   
-    // double update_cost = update_end_node->g + (getDis(update_end_node->coord.head<3>(), end_pt) + getDis(root_node->coord.head<3>(), commit_root.head<3>()))*((1-weightT) + weightT/max_vel);
-    // double update_cost = update_end_node->g + getDis(update_end_node->coord.head<3>(), end_pt)*((1 - weightT) + weightT / max_vel);
+    // double update_cost = update_end_node->g + (getDis(update_end_node->coord.head<3>(), end_pt) + getDis(root_node->coord.head<3>(), commit_root.head<3>()))*(1 + weightT/max_vel);
+    // double update_cost = update_end_node->g + getDis(update_end_node->coord.head<3>(), end_pt)*((1) + weightT / max_vel);
     double spatial_remain = (end_pt - update_end_node->coord.head<3>()).norm();
-    double heuristic_cost = (1 - weightT) * spatial_remain + weightT * (spatial_remain / max_vel);
+    double heuristic_cost = (1) * spatial_remain + weightT * (spatial_remain / max_vel);
     double update_cost = update_end_node->g + heuristic_cost;
 
     if (update_cost + 1e-6 < min_distance) {
@@ -684,9 +683,9 @@ inline NodePtr_dynamic safeRegionRrtStarDynamic::genNewNode(Vector4d & pt_sample
         center[3] = node_nearest_ptr->coord[3] + delta_t/2;
         dis_T = delta_t/2;
     }
-    if (dis > max_vel * 0.9 * dis_T) {
+    if (dis > max_vel * dis_T) {
         Eigen::Vector3d direction = (pt_sample.head<3>() - node_nearest_ptr->coord.head<3>()).normalized();
-        center.head<3>() = node_nearest_ptr->coord.head<3>() + direction * (max_vel * 0.9 * dis_T);
+        center.head<3>() = node_nearest_ptr->coord.head<3>() + direction * (max_vel * dis_T);
     } else {
         center.head<3>() = pt_sample.head<3>();
     }
@@ -697,7 +696,7 @@ inline NodePtr_dynamic safeRegionRrtStarDynamic::genNewNode(Vector4d & pt_sample
     // auto elapsed_radiussearch = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count()*1e-6;
     // std::cout<<"[gen new node debug] elapsed radius search: "<<elapsed_radiussearch<<std::endl;
     double h_dis_ = getDis(center.head<3>(), end_pt);
-    h_dis_ = (1-weightT)*h_dis_ + weightT*h_dis_/max_vel;
+    h_dis_ = 1*h_dis_ + weightT*h_dis_/max_vel;
     auto node_new_ptr = make_shared<Node_dynamic>(center, radius_, INFINITY, h_dis_);
     return node_new_ptr;
 }
@@ -782,7 +781,7 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
         }
 
         auto ST_pair = getDisMetric(nearPtr, newPtr);
-        double dis = (1-weightT)*ST_pair.first + weightT*ST_pair.second;
+        double dis = 1*ST_pair.first + weightT*ST_pair.second;
         if(ST_pair.second <= delta_t/2 || ST_pair.second > 2*delta_t || ST_pair.first > max_vel*ST_pair.second) dis = INFINITY;
         int res = checkNodeRelation(nearPtr, newPtr);
         nearPtr->rel_id = res;
@@ -813,7 +812,7 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
     }
     auto st_dis = getDisMetric(nearestPtr, newPtr);
 
-    double min_cost = nearestPtr->g + (1-weightT)*st_dis.first + weightT*st_dis.second;
+    double min_cost = nearestPtr->g + 1*st_dis.first + weightT*st_dis.second;
     if(st_dis.second <= delta_t/2 or st_dis.second > 2*delta_t || st_dis.first > max_vel*st_dis.second) min_cost = INFINITY;
     newPtr->preNode_ptr = nearestPtr;
     newPtr->g = min_cost;
@@ -852,7 +851,7 @@ void safeRegionRrtStarDynamic::treeRewire(NodePtr_dynamic node_new_ptr, NodePtr_
         if(nearPtr->valid == false) continue;
 
         auto st_pair = getDisMetric(newPtr, nearPtr);
-        double dis = (1-weightT)*st_pair.first + weightT*st_pair.second;
+        double dis = 1*st_pair.first + weightT*st_pair.second;
         if(st_pair.second <= delta_t/2 || st_pair.second > 2*delta_t || st_pair.first > max_vel*st_pair.second) dis = INFINITY;
         double cost = dis + newPtr->g;
         
@@ -933,9 +932,9 @@ void safeRegionRrtStarDynamic::tracePath() {
     best_end_ptr = feasibleEndList[0];
     double best_cost = INFINITY;
     for(auto nodeptr: feasibleEndList) {   
-        double dis_1 = getDis(nodeptr->coord.head<3>(), end_pt)*((1-weightT) + weightT/max_vel);
+        double dis_1 = getDis(nodeptr->coord.head<3>(), end_pt)*(1 + weightT/max_vel);
         auto d2 = getDisMetric(root_node->coord, commit_root);
-        double dis_2 = (1-weightT)*d2.first + weightT*d2.second;
+        double dis_2 = 1*d2.first + weightT*d2.second;
         double cost = (nodeptr->g + dis_1 + dis_2);
         if(cost < best_cost) {
             best_end_ptr = nodeptr;
@@ -1273,7 +1272,7 @@ void safeRegionRrtStarDynamic::SafeRegionEvaluate( double time_limit )
             {   
                 auto p_ST = getDisMetric(root_node->coord, commit_root);
 
-                double cost = (nodeptr->g + getDis(nodeptr->coord.head<3>(), end_pt)*((1 - weightT) + weightT/max_vel) + (1 - weightT)*p_ST.first + p_ST.second * weightT);
+                double cost = (nodeptr->g + getDis(nodeptr->coord.head<3>(), end_pt)*((1) + weightT/max_vel) + (1)*p_ST.first + p_ST.second * weightT);
                 if( cost < best_cost ){
                     best_end_ptr  = nodeptr;
                     best_cost = cost;

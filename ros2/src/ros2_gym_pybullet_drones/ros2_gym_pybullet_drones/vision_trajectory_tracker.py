@@ -72,7 +72,7 @@ class AviaryWrapper(Node):
                            obstacles=True,
                            dynamic_obs = self.is_dynamic,
                            static_obs = self.is_static,
-                           num_obstacles = 30,
+                           num_obstacles = 20,
                            deg360=self.lidar,
                            user_debug_gui=False,
                            environment_file="environment_31.csv"

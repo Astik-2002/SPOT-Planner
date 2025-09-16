@@ -102,7 +102,7 @@ struct kdtree *kd_create(int k)
 
 void kd_free(struct kdtree *tree)
 {
-	printf("tree destruct called in kd_free");
+	// printf("tree destruct called in kd_free");
 	if(tree) {
 		kd_clear(tree);
 		free(tree);

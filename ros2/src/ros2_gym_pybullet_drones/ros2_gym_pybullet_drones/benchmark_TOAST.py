@@ -126,7 +126,7 @@ def run_trial(trial):
 def main():
     rclpy.init()
     try:
-        for i in range(1, 51):
+        for i in range(1, 21):
             a = run_trial(i)
             # if a == False:
             #     print("process crash debugging")
