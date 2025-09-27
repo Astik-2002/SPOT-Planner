@@ -1,0 +1,54 @@
+rog_map:
+  resolution: 0.05
+  inflation_resolution: 0.1
+  inflation_step: 3
+  unk_inflation_en: false
+  unk_inflation_step: 1
+  map_size: [15, 110, 6]
+  fix_map_origin: [0, 0, 1.5]
+  frontier_extraction_en: false
+
+  virtual_ceil_height: 3.5
+  virtual_ground_height: -0.1
+
+  load_pcd_en: false
+
+  map_sliding:
+    enable: false
+    threshold: 3.0
+
+  esdf:
+    enable: false
+    resolution: 0.1
+    local_update_box: [5, 5, 3]
+
+  ros_callback:
+    enable: true
+    cloud_topic: "/pcd_gym_pybullet"
+    odom_topic: "/odom"
+    odom_timeout: 2.0
+
+  visualization:
+    enable: true
+    use_dynamic_reconfigure: false
+    time_rate: 2
+    frame_rate: 0
+    range: [15, 15, 4]
+    frame_id: "world"
+    pub_unknown_map_en: false
+
+  intensity_thresh: -10
+  point_filt_num: 1
+
+  raycasting:
+    enable: false
+    batch_update_size: 1
+    local_update_box: [100, 100, 5]
+    ray_range: [0.5, 100]
+    p_min: 0.12
+    p_miss: 0.49
+    p_free: 0.499
+    p_occ: 0.85
+    p_hit: 0.9
+    p_max: 0.98
+    unk_thresh: 1.0
