@@ -2,7 +2,7 @@
 This repository provides an implementation of SPOT algorithm in gym pybullet environment. 
 
 ```bash
-$ conda create -n drones python=3.8
+$ conda env create -f environment.yml
 $ conda activate drones
 $ pip3 install --upgrade pip
 $ git clone https://github.com/Astik-2002/SPOT-Spatio-Temporal-Obstacle-free-Trajectory-Planning-for-UAVs-in-unknown-dynamic-environments
