@@ -127,46 +127,12 @@ function(add_rrt_executable target_name)
   target_compile_features(${target_name} PUBLIC c_std_99 cxx_std_17)
 endfunction()
 
-# Main RRT node (uses standard kdtree)
-set(SOURCES_RRT_NODE
-  ${COMMON_SOURCES}
-  src/corridor_finder.cpp
-  src/corridor_finder_ellip.cpp
-  src/rrt_node.cpp
-)
-add_rrt_executable(rrt_node ${SOURCES_RRT_NODE} $<TARGET_OBJECTS:kdtree_obj>)
-
 # Trajectory server with yaw
 set(SOURCES_TRAJECTORY_SERVER_YAW
   src/trajectory_server_yaw.cpp
   src/non_uniform_bspline.cpp
 )
 add_rrt_executable(trajectory_server_yaw ${SOURCES_TRAJECTORY_SERVER_YAW})
-
-# PX4 yaw trajectory server
-set(SOURCES_TRAJECTORY_SERVER_PX4_YAW
-  src/trajectory_server_px4_yaw.cpp
-  src/non_uniform_bspline.cpp
-)
-add_rrt_executable(trajectory_server_px4_yaw ${SOURCES_TRAJECTORY_SERVER_PX4_YAW})
-ament_target_dependencies(trajectory_server_px4_yaw px4_msgs)
-
-# MAVROS trajectory server
-set(SOURCES_TRAJECTORY_SERVER_MAVROS
-  src/trajectory_server_mavros.cpp
-  src/non_uniform_bspline.cpp
-)
-add_rrt_executable(trajectory_server_mavros ${SOURCES_TRAJECTORY_SERVER_MAVROS})
-ament_target_dependencies(trajectory_server_mavros 
-  mavros_msgs
-  geometry_msgs
-)
-
-# New replan executable
-set(SOURCES_NEW_REPLAN ${SOURCES_RRT_NODE})
-list(REMOVE_ITEM SOURCES_NEW_REPLAN src/rrt_node.cpp)
-list(APPEND SOURCES_NEW_REPLAN src/rrt_node_new_replan.cpp)
-add_rrt_executable(new_replan ${SOURCES_NEW_REPLAN} $<TARGET_OBJECTS:kdtree_obj>)
 
 # Dynamic RRT executable (uses dynamic kdtree)
 set(SOURCES_RRT_DYNAMIC
@@ -175,13 +141,6 @@ set(SOURCES_RRT_DYNAMIC
   src/rrt_dynamic.cpp
 )
 add_rrt_executable(rrt_dynamic ${SOURCES_RRT_DYNAMIC} $<TARGET_OBJECTS:kdtree_dynamic_obj>)
-
-# PX4 yaw RRT node
-set(SOURCES_RRT_NODE_PX4_YAW ${SOURCES_RRT_NODE})
-list(REMOVE_ITEM SOURCES_RRT_NODE_PX4_YAW src/rrt_node.cpp)
-list(APPEND SOURCES_RRT_NODE_PX4_YAW src/rrt_node_px4_yaw.cpp)
-add_rrt_executable(rrt_node_px4_yaw ${SOURCES_RRT_NODE_PX4_YAW} $<TARGET_OBJECTS:kdtree_obj>)
-ament_target_dependencies(rrt_node_px4_yaw px4_msgs)
 
 # PCD manipulation tools
 add_rrt_executable(pcd_manipulation src/pcd_manipulation.cpp)
@@ -197,32 +156,11 @@ ament_target_dependencies(pcd_segmentation cv_bridge
   tf2_eigen
 )
 target_link_libraries(pcd_segmentation tf2_eigen::tf2_eigen)
-# Pointcloud transformer
-add_executable(pointcloud_transformer src/pointcloud_transformer.cpp)
-ament_target_dependencies(pointcloud_transformer
-  rclcpp
-  mavros_msgs
-  geometry_msgs
-  sensor_msgs
-  px4_msgs
-  nav_msgs
-  tf2_ros
-  pcl_conversions
-  tf2_sensor_msgs
-  tf2_geometry_msgs
-)
-target_link_libraries(pointcloud_transformer ${COMMON_LIBS})
-target_compile_features(pointcloud_transformer PUBLIC cxx_std_17)
 
 # Install targets
 install(TARGETS 
-  rrt_node_px4_yaw 
-  trajectory_server_px4_yaw 
-  trajectory_server_mavros  # Add MAVROS trajectory server
-  pointcloud_transformer 
   trajectory_server_yaw 
   pcd_manipulation 
-  new_replan 
   rrt_dynamic 
   pcd_segmentation
   DESTINATION lib/${PROJECT_NAME}
@@ -245,7 +183,6 @@ ament_export_dependencies(
   tf2_sensor_msgs
   tf2_geometry_msgs
   custom_interface_gym
-  px4_msgs
   mavros_msgs  # Export MAVROS dependencies
   geometry_msgs
 )

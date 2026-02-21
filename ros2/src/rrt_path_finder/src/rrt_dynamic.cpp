@@ -38,7 +38,6 @@
 #include "rrt_path_finder/ciri_sphere.h"
 #include "rrt_path_finder/gcopter.hpp"
 #include "rrt_path_finder/gcopter_fixed.hpp"
-#include "rrt_path_finder/gcopter_dynamic.hpp"
 #include "rrt_path_finder/trajectory.hpp"
 #include "rrt_path_finder/geo_utils.hpp"
 #include "rrt_path_finder/quickhull.hpp"
@@ -47,7 +46,6 @@
 #include "rrt_path_finder/datatype_dynamic.h"
 #include "rrt_path_finder/yaw_optimization.hpp"
 #include "rrt_path_finder/non_uniform_bspline.hpp"
-#include "rrt_path_finder/BT.hpp"
 // #include "rrt_path_finder/custom_hash.hpp"
 #include "custom_interface_gym/msg/dynamic_bbox.hpp"
 #include "custom_interface_gym/msg/bounding_box_array.hpp"
@@ -272,7 +270,6 @@ private:
     // safeRegionRrtStarDynamicEllip _rrtPathPlanner;
     gcopter::GCOPTER_PolytopeSFC _gCopter;
     gcopter_fixed::GCOPTER_PolytopeSFC_FixedTime _gCopter_fixed;
-    gcopter_dynamic::GCOPTER_PolytopeSFC_Dynamic _gCopter_dynamic;
     pcl::PointCloud<pcl::PointXYZ>::Ptr dynamic_cloud;
     pcl::search::KdTree<pcl::PointXYZ> static_kdtree;
     pcl::search::KdTree<pcl::PointXYZ> dynamic_kdtree;
@@ -948,8 +945,6 @@ private:
         _traj.clear();
         auto t_now = rclcpp::Clock().now();
         double s_time = (t_now - pointcloud_receive_time).seconds();
-        _gCopter_dynamic.setDynamicObstacles(dynamic_obs, s_time, _uav_radius);
-        // !_gCopter_dynamic.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams, true)
         // !_gCopter.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams)
         std::cout<<"matrix check backup traj gen 1"<<std::endl;
         if (!_gCopter.setup(weightT, iniState, finState, bkup_hpolys, INFINITY, smoothingEps, quadratureRes, magnitudeBounds, penaltyWeights, physicalParams))
