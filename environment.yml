@@ -262,7 +262,6 @@ dependencies:
       - grpcio==1.73.0
       - gym==0.23.0
       - gym-notices==0.0.8
-      - gym-pybullet-drones==0.0.3
       - gymnasium==0.28.1
       - h11==0.16.0
       - h5py==3.15.1
@@ -386,4 +385,3 @@ dependencies:
       - wrapt==1.17.2
       - xlsxwriter==3.2.9
       - zstandard==0.25.0
-prefix: /home/astik/anaconda3/envs/drones
