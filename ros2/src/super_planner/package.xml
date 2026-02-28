@@ -11,6 +11,7 @@
     <depend>nav_msgs</depend>
     <depend>std_msgs</depend>
     <depend>rog_map</depend>
+    <depend>mars_quadrotor_msgs</depend>
 
     <export>
         <build_type>ament_cmake</build_type>

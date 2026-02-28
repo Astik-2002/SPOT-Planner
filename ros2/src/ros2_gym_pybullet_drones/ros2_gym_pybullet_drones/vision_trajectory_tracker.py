@@ -67,7 +67,7 @@ class AviaryWrapper(Node):
                            neighbourhood_radius=np.inf,
                            freq=self.timer_freq_hz,
                            aggregate_phy_steps=1,
-                           gui=False,
+                           gui=True,
                            record=False,
                            obstacles=True,
                            dynamic_obs = self.is_dynamic,

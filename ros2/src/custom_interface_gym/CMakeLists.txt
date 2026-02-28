@@ -11,7 +11,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)  # For message and service generation
 find_package(geometry_msgs REQUIRED)  # Include dependencies used in messages
 find_package(std_msgs REQUIRED)
-find_package(geographic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 
 # Define custom messages and services
@@ -26,7 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DynamicPoint.msg"
   "msg/DynamicPointCloud.msg"
   "msg/ServerState.msg"
-  DEPENDENCIES geometry_msgs std_msgs geographic_msgs sensor_msgs # Specify dependencies
+  DEPENDENCIES geometry_msgs std_msgs sensor_msgs # Specify dependencies
 )
 
 # Testing and linting

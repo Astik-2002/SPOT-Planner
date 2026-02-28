@@ -25,55 +25,52 @@ find_package(tf2_sensor_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(px4_msgs REQUIRED)
-find_package(mavros_msgs REQUIRED)  # Add MAVROS package
 find_package(geometry_msgs REQUIRED)  # For MAVROS messages
 find_package(tf2_eigen REQUIRED)
 
-# Find libdwarf and libdw
-find_path(LIBDWARF_INCLUDE_DIRS NAMES dwarf.h libdwarf.h PATHS /usr/include/libdwarf REQUIRED)
-find_library(LIBDWARF_LIBRARIES NAMES dwarf libdwarf REQUIRED)
-find_path(LIBDW_INCLUDE_DIRS NAMES libdw.h PATHS /usr/include/elfutils REQUIRED)
-find_library(LIBDW_LIBRARIES NAMES dw REQUIRED)
-
 # Set custom paths for custom_interface_gym
-set(CUSTOM_INTERFACE_GYM_INSTALL_DIR "/home/astik/gym-pybullet-drones/ros2/install/custom_interface_gym")
+# Prefer an explicit CMake or environment variable override, then fall back to
+# the conventional location inside the current user's home directory.
+if(NOT CUSTOM_INTERFACE_GYM_INSTALL_DIR)
+  if(DEFINED ENV{CUSTOM_INTERFACE_GYM_INSTALL_DIR})
+    set(CUSTOM_INTERFACE_GYM_INSTALL_DIR "$ENV{CUSTOM_INTERFACE_GYM_INSTALL_DIR}")
+  else()
+    set(CUSTOM_INTERFACE_GYM_INSTALL_DIR "$ENV{HOME}/SPOT-Spatio-Temporal-Obstacle-free-Trajectory-Planning-for-UAVs-in-unknown-dynamic-environments/ros2/install/custom_interface_gym")
+  endif()
+endif()
 
 # Add the custom_interface_gym install path to CMAKE_PREFIX_PATH
 list(APPEND CMAKE_PREFIX_PATH "${CUSTOM_INTERFACE_GYM_INSTALL_DIR}")
 
-# Find custom_interface_gym - try multiple approaches
-find_package(custom_interface_gym REQUIRED
+# Find custom_interface_gym
+find_package(custom_interface_gym QUIET
   PATHS "${CUSTOM_INTERFACE_GYM_INSTALL_DIR}"
   NO_DEFAULT_PATH
 )
 
 if(NOT custom_interface_gym_FOUND)
-  # Try alternative approach if not found
+  # Fall back to any path on CMAKE_PREFIX_PATH / ament index
   find_package(custom_interface_gym REQUIRED)
 endif()
 
-# Verify the package was found
 if(custom_interface_gym_FOUND)
   message(STATUS "Found custom_interface_gym: ${custom_interface_gym_DIR}")
 else()
-  message(FATAL_ERROR "Failed to find custom_interface_gym package")
+  message(FATAL_ERROR "Failed to find custom_interface_gym package. "
+    "Set CUSTOM_INTERFACE_GYM_INSTALL_DIR (CMake or environment variable) "
+    "to the install directory of the custom_interface_gym package.")
 endif()
 
 # Include directories
 include_directories(
   include
   ${PCL_INCLUDE_DIRS}
-  ${LIBDWARF_INCLUDE_DIRS}
-  ${LIBDW_INCLUDE_DIRS}
   ${custom_interface_gym_INCLUDE_DIRS}
 )
 
 # Common target link libraries
 set(COMMON_LIBS
   ${PCL_LIBRARIES}
-  ${LIBDWARF_LIBRARIES}
-  ${LIBDW_LIBRARIES}
 )
 
 # Common dependencies
